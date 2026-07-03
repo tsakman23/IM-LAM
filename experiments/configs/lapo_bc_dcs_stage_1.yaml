@@ -1,0 +1,60 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - net: lapo_identity_quantizer
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: lapo
+  job_type: inverse_dynamics_model
+  tags: [lapo, impala_encoder, impala_decoder, stage_1]
+
+trainer:
+  max_epochs: 2
+  validation_frequency: 5000
+  validation_unit: step
+
+env:
+  name: dm_control/masked-cheetah-run-distractor-low-v0
+  block_size: 4
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+module:
+  _target_: ifo.modules.lapo.module.LAPOIDMModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 6e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 35156
+    eta_min: 0.0
+  num_workers: 8
+  max_grad_norm: null
+  vq_loss_scale_factor: 0.1
+  reconstruction_loss_scale_factor: 1.0
+  action_loss_scale_factor: 0.01
+
+net:
+  _target_: ifo.modules.lapo.nets.LAPOIDM
+  _partial_: True
+  channel_multiplier: 4
+  world_model:
+    # Config for LAPO world model from LAPO paper for discrete action spaces.
+    # _target_: ifo.common.nets.world_model.UNetWorldModel
+    # _partial_: True
+    # base_channels: 24
+    # Config for LAPO world model from LAOM paper for continuous action spaces.
+    _target_: ifo.common.nets.world_model.ImpalaWorldModel
+    _partial_: True
+    channel_multiplier: 6
+    encoder_channels: [16, 32, 32]
+    encoder_num_res_blocks: 2
+  use_orthogonal_init: True  # Only use for ImpalaWorldModel.

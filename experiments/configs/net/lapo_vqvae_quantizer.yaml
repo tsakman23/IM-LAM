@@ -1,0 +1,9 @@
+code_dim: 128
+num_latents: 4
+quantizer:
+  _target_: ifo.common.nets.quantizer.VectorQuantizerEMA
+  num_codes: 128
+  code_dim: 32  # net code_dim // num_latents
+  num_codebooks: 2
+  beta: 0.05
+  decay: 0.999 

@@ -1,0 +1,6 @@
+code_dim: 16
+num_latents: 1
+quantizer:
+    _target_: ifo.common.nets.quantizer.FiniteScalarQuantizer
+    code_dim: ${net.code_dim}
+    levels: [2, 2, 2, 2, 3, 2, 2, 2, 2, 2, 3, 2, 2, 2, 2, 2]

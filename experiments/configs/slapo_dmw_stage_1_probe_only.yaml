@@ -1,0 +1,12 @@
+defaults:
+  - slapo_dmw_stage_1
+  - _self_
+
+module:
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr:
+      action_decoder: 3e-4
+  vq_loss_scale_factor: 0.0
+  reconstruction_loss_scale_factor: 0.0
+  action_loss_scale_factor: 0.01

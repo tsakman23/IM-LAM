@@ -1,0 +1,54 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-2
+
+logger:
+  project: slapo
+  job_type: latent_policy
+  tags: [slapo, impala_encoder, stage_2]
+
+trainer:
+  max_epochs: 2
+  validation_frequency: 5000
+  validation_unit: step
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-1
+
+env:
+  name: dm_control/masked-cheetah-run-distractor-low-v0
+  block_size: 13  # This must be future_obs_offset + frame_stack.
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+module:
+  _target_: ifo.modules.slapo.module.SLAPOLatentPolicyModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 4e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 35156
+    eta_min: 0.0
+  num_workers: 8
+  max_grad_norm: null
+  latent_action_loss_scale_factor: 1.0
+  action_loss_scale_factor: 0.01
+
+net:
+  _target_: ifo.modules.slapo.nets.SLAPOLatentPolicy
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 128
+  future_obs_offset: 10
+  frame_stack: 3
+  add_mask_to_observation: True
+  mask_observation: False
+  future_obs_sampling: True
+  segmentation_net: null

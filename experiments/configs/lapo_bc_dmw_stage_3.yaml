@@ -1,0 +1,16 @@
+defaults:
+  - lapo_bc_dcs_stage_3
+  - _self_
+
+module:
+  batch_size: 128
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-3
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 25000
+    eta_min: 0.0
+
+env:
+  name: Meta-World/masked-MT1-button-press-v3

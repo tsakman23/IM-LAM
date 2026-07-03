@@ -1,0 +1,15 @@
+defaults:
+  - sl_default
+  - _self_
+
+_target_: ifo.modules.ilpo.trainer.ILPOPolicyRemappingTrainer
+max_steps: 2048
+n_steps: 256
+n_epochs: 128
+validation_steps: 1000
+validation_frequency: 256
+video_trigger_steps: 1000
+video_length: 200
+epsilon_greedy: 0.2
+validation_exploration_mode: mode
+block_size: 1

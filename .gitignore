@@ -1,0 +1,23 @@
+wandb
+videos
+runs
+checkpoints/*
+!checkpoints/experts
+__pycache__
+*cache*
+*tmp*
+.vscode/*
+*.egg-info
+outputs
+logs/*
+datasets/*
+pypdl.log
+cluster_logs/*
+
+# Bundled Python environment / caches — must never be tracked
+conda_env/
+.uv_cache/
+
+# OS / editor / tooling
+.DS_Store
+.claude/

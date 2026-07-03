@@ -1,0 +1,31 @@
+defaults:
+  - bc_default
+  - _self_
+
+logger:
+  tags: [bc, transformer_policy, impala_encoder]
+
+env:
+  name: MineRLBasaltMakeWaterfall-v0
+  num_envs: 4
+  block_size: 32
+  step_trigger: 1e4
+  video_length: 4e3
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}
+
+module:
+  _target_: ifo.modules.bc.module.BehaviorCloningTransformerModule
+  _recursive_: False
+
+net:
+  _target_: ifo.modules.bc.nets.ImpalaTransformerActorAgent
+  _partial_: True
+  channel_multiplier: 4
+  nhead: 8
+  num_layers: 6
+
+rollout_callback:
+  rollout_steps: 1e4

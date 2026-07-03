@@ -1,0 +1,65 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: ilpo
+  job_type: latent_policy
+  tags: [ilpo, impala_encoder, unet_decoder, latent_policy, stage_1]
+
+trainer:
+  validation_frequency: 7031
+  validation_unit: step
+
+env:
+  name: procgen-bigfish-v0
+  block_size: 2  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+module:
+  _target_: ifo.modules.ilpo.module.ILPOLatentPolicyModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 6e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.01
+    total_iters: 17578
+  num_workers: 8
+
+net:
+  _target_: ifo.modules.ilpo.nets.ILPOLatentPolicy
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 5
+  policy_block_size: 1
+
+decoder_callback:
+  _target_: ifo.modules.lapo.callbacks.DecoderCallback
+  _recursive_: False
+  max_epochs: 1
+  limit_train_batches: 1000
+  limit_val_batches: 1000
+  net:
+    _target_: ifo.modules.lapo.nets.LAPOLatentActionDecoder
+    in_features: 5  # Must be identical with code_dim
+    out_features: 128
+    hidden_layers:
+      - 128
+  module:
+    _target_: ifo.modules.lapo.module.LAPOLatentActionDecoderModule
+    batch_size: 512
+    optimizer:
+      _target_: torch.optim.AdamW
+      lr: 1e-3
+    lr_scheduler: null

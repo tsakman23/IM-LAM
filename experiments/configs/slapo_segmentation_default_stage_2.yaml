@@ -1,0 +1,12 @@
+defaults:
+  - slapo_default_stage_2
+  - _self_
+
+logger:
+  tags: [slapo, impala_encoder, stage_2, predicted_mask]
+
+net:
+  segmentation_net:
+    _target_: ifo.modules.slapo.nets.SLAPOSegmentationNet
+    _partial_: True
+    base_channels: 24

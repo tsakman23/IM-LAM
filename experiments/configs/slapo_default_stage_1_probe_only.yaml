@@ -1,0 +1,16 @@
+defaults:
+  - slapo_default_stage_1
+  - _self_
+
+trainer:
+  load_only_model: True
+  checkpoint_path: ???
+
+module:
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr:
+      action_decoder: 6e-4
+  vq_loss_scale_factor: 0.0
+  reconstruction_loss_scale_factor: 0.0
+  action_loss_scale_factor: 0.01

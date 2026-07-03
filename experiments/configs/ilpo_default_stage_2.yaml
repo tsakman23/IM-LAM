@@ -1,0 +1,49 @@
+defaults:
+  - rl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-2
+
+logger:
+  project: ilpo
+  job_type: policy
+  tags: [ilpo, impala_encoder, unet_decoder, policy, stage_2]
+
+trainer:
+  _target_: ifo.modules.ilpo.trainer.ILPOTrainer
+  max_steps: 4e6
+  validation_frequency: 12288
+  validation_steps: 1e5
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-1
+
+env:
+  name: ${env.name}
+  num_envs: 64
+  step_trigger: 1e5
+
+dataset:
+  name: procgen-bigfish-v0
+
+module:
+  _target_: ifo.modules.ilpo.module.ILPORemappingModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-4
+  lr_scheduler: null
+  num_workers: 1
+  max_grad_norm: null
+  num_steps: 4096
+  epsilon_greedy: 0.2
+  update_epochs: 1
+  replay_buffer_capacity: 2e3
+
+net:
+  _target_: ifo.modules.ilpo.nets.ILPOActorAgent
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 5
+  world_model_block_size: 2  # This describes o_{t-world_model_block_size+2} ... o_t, o_{t+1}

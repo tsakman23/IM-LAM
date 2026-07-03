@@ -1,0 +1,49 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-2
+
+logger:
+  project: lapo
+  job_type: latent_policy
+  tags: [lapo, impala_encoder, stage_2]
+
+trainer:
+  validation_frequency: 1000
+  validation_unit: step
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-1
+
+env:
+  name: procgen-bigfish-v0
+  block_size: 3
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+module:
+  _target_: ifo.modules.lapo.module.LAPOLatentPolicyModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 4e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.01
+    total_iters: 17578
+  num_workers: 8
+  max_grad_norm: null
+  latent_action_loss_scale_factor: 1.0
+  action_loss_scale_factor: 1.0
+
+net:
+  _target_: ifo.modules.lapo.nets.LAPOLatentPolicy
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 128
+  policy_block_size: 1

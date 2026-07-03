@@ -1,0 +1,11 @@
+# Base config for logging with Weights and Biases.
+project: masklam
+group: null
+job_type: training
+name: null
+tags: null
+notes: null
+mode: online  # Set to "disabled" to disable logging
+sync_tensorboard: False
+monitor_gym: False
+resume: "allow"

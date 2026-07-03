@@ -1,0 +1,4 @@
+code_dim: 128
+num_latents: 4
+quantizer:
+    _target_: ifo.common.nets.quantizer.IdentityQuantizer

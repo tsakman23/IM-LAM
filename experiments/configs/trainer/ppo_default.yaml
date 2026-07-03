@@ -1,0 +1,8 @@
+defaults:
+  - rl_default
+  - _self_
+
+_target_: ifo.modules.ppo.trainer.PPOTrainer
+max_steps: 5e7
+num_envs: 8
+  

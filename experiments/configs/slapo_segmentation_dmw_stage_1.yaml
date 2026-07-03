@@ -1,0 +1,15 @@
+defaults:
+  - slapo_dmw_stage_1
+  - _self_
+
+logger:
+  tags: [slapo, impala_encoder, impala_decoder, stage_1, predicted_mask]
+
+trainer:
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-0
+
+net:
+  segmentation_net:
+    _target_: ifo.modules.slapo.nets.SLAPOSegmentationNet
+    _partial_: True
+    base_channels: 24

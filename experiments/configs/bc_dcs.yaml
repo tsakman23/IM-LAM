@@ -1,0 +1,50 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: bc
+  tags: [bc, mlp_policy, impala_encoder]
+
+trainer:
+  max_epochs: 10
+
+env:
+  name: dm_control/cheetah-run-distracting-scale-easy-video-hard-v0
+  num_envs: 16
+  block_size: 3
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}
+
+module:
+  _target_: ifo.modules.bc.module.BehaviorCloningModule
+  _recursive_: False
+  batch_size: 2048
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 8e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.01
+    total_iters: 24365
+  num_workers: 8
+  max_grad_norm: 0.5
+
+net:
+  _target_: ifo.modules.bc.nets.ImpalaActorAgent
+  _partial_: True
+  channel_multiplier: 4
+
+rollout_callback:
+  _target_: ifo.modules.bc.callbacks.RolloutCallback
+  rollout_steps: 1e5
+  rollout_frequency: 1
+  rollout_exploration_mode: sample
+

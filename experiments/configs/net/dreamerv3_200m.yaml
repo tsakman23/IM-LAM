@@ -1,0 +1,10 @@
+defaults:
+  - dreamerv3_default
+  - _self_
+
+world_model:
+  recurrent_state_size: 8192
+  hidden_size: 1024
+  discrete_size: 64
+  cnn_channels_multiplier: 64
+  dense_units: 1024

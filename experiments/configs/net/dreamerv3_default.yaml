@@ -1,0 +1,127 @@
+_target_: ifo.modules.dreamerv3.nets.DreamerV3ActorCriticAgent
+_partial_: True
+_convert_: partial
+hafner_initialization: True
+world_model:
+  discrete_size: 64  # Corresponds to "Codes per latent (d/16)" in the paper and "classes" in the code
+  stochastic_size: 32
+  learnable_initial_recurrent_state: True
+  unimix: 0.01
+  dense_units: 1024  # Corresponds to "Hidden size (d)" in the paper and "units" in the code
+  hidden_size: 1024  # Corresponds to "Hidden size (d)" in the paper and "hidden" in the code
+  recurrent_state_size: 8192  # Corresponds to "Recurrent units (8d)" in the paper and "deter" in the code
+  cnn_channels_multiplier: 64  # Corresponds to "Base CNN channels (d/16)" in the paper and "depth" in the code
+  cnn_act: torch.nn.SiLU
+  dense_act: torch.nn.SiLU
+  cnn_layer_norm:
+    cls: ifo.common.nets.base.LayerNormChannelLast
+    kw: 
+      eps: 1e-3
+  mlp_layer_norm:
+    cls: torch.nn.RMSNorm
+    kw:
+      eps: 1e-6
+  cnn_keys:
+    encoder: ["image"]
+    decoder: ${net.world_model.cnn_keys.encoder}
+  mlp_keys:
+    encoder: []
+    decoder: ${net.world_model.mlp_keys.encoder}
+  encoder:
+    cnn_channels_multiplier: ${net.world_model.cnn_channels_multiplier}
+    cnn_act: ${net.world_model.cnn_act}
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 3
+    cnn_layer_norm: ${net.world_model.cnn_layer_norm}
+    mlp_layer_norm: ${net.world_model.mlp_layer_norm}
+    dense_units: ${net.world_model.dense_units}
+    cnn_layer_args:
+      kernel_size: 4
+      stride: 2
+      padding: 1
+      bias: False
+    mlp_layer_args:
+      bias: False
+  decoder:
+    cnn_channels_multiplier: ${net.world_model.cnn_channels_multiplier}
+    cnn_act: ${net.world_model.encoder.cnn_act}
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 3
+    cnn_layer_norm: ${net.world_model.cnn_layer_norm}
+    mlp_layer_norm: ${net.world_model.mlp_layer_norm}
+    dense_units: ${net.world_model.dense_units}
+    cnn_layer_args:
+      kernel_size: 4
+      stride: 2
+      padding: 1
+      bias: False
+    cnn_last_layer_args:
+      kernel_size: 4
+      stride: 2
+      padding: 1
+    mlp_layer_args:
+      bias: False
+  reward_model:
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 1
+    layer_norm: ${net.world_model.mlp_layer_norm}
+    dense_units: ${net.world_model.dense_units}
+    bins: 255
+  discount_model:
+    learnable: True
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 1
+    layer_norm: ${net.world_model.mlp_layer_norm}
+    dense_units: ${net.world_model.dense_units}
+  recurrent_model:
+    block_diagonal: True  # Whether to use block diagonal recurrent model or a regular GRU recurrent model
+    recurrent_state_size: ${net.world_model.recurrent_state_size}
+    hidden_size: ${net.world_model.hidden_size}
+    blocks: 8
+    layer_norm: ${net.world_model.mlp_layer_norm}
+    dense_units: ${net.world_model.dense_units}
+    mlp_layers: 1
+  transition_model:
+    hidden_size: ${net.world_model.hidden_size}
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 2
+    layer_norm: ${net.world_model.mlp_layer_norm}
+  representation_model:
+    hidden_size: ${net.world_model.hidden_size}
+    dense_act: ${net.world_model.dense_act}
+    mlp_layers: 1
+    layer_norm: ${net.world_model.mlp_layer_norm}
+actor:
+  dense_units: ${net.world_model.dense_units}
+  dense_act: ${net.world_model.dense_act}
+  mlp_layers: 3
+  layer_norm: ${net.world_model.mlp_layer_norm}
+  box_head_distribution: scaled_normal
+  categorical_head_distribution: one_hot_categorical
+  min_std: 0.1
+  max_std: 1.0
+  init_std: 2.0
+  mean_scale: 1.0
+  unimix: ${net.world_model.unimix}
+critic:
+  dense_act: ${net.world_model.dense_act}
+  mlp_layers: 3
+  layer_norm: ${net.world_model.mlp_layer_norm}
+  dense_units: ${net.world_model.dense_units}
+  bins: 255
+normalizer:
+  return:
+    impl: "perc"
+    rate: 0.01
+    limit: 1.0
+    perclo: 5.0
+    perchi: 95.0
+    debias: False
+  value:
+    impl: "none"
+    rate: 0.01
+    limit: 1e-8
+  advantage:
+    impl: "none"
+    rate: 0.01
+    limit: 1e-8

@@ -1,0 +1,118 @@
+[project]
+description = "A small library for learning from observations"
+name = "ifo"
+authors = [{ name = "Anonymous Author", email = "anonymous@example.com" }]
+maintainers = [{ name = "Anonymous Maintainer", email = "anonymous@example.com" }]
+keywords = ["reinforcement", "imitation", "machine", "learning", "video"]
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10,<3.12"
+classifiers = [
+    "Programming Language :: Python",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "gymnasium==1.1.1",
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "lightning==2.5.6",
+    "hydra-core==1.3.2",
+    "datasets==4.5.0",
+    "wandb[media]",
+    "sentry-sdk==2.0.0",        # Needed to prevent wandb deprecation warnings related to Scope.user setter
+    "tensordict==0.10.0",       # Newer versions show warnings related to deepcopy with fabric
+    "torchmetrics==1.8.0",
+    "opencv_python==4.11.0.86",
+    "av==14.2.0",
+    "coolname==2.2.0",
+    "rich==14.0.0",
+    "h5py==3.14.0",
+    "pypdl==1.5.4",
+    "numpy==1.23.5",
+    "setuptools<66",            # Needed to prevent 'DeprecationWarning: pkg_resources is deprecated as an API.' for pygame
+    "safetensors==0.7.0",
+    "decorator==4.0.2",         # Needed to prevent Moviepy errors. E.g. TypeError: must be real number, not NoneType
+    # They plan to fix it in a future version, see https://github.com/pygame/pygame/pull/4583
+]
+
+dynamic = ["version"]
+
+[project.optional-dependencies]
+minigrid = ["minigrid==2.3.1"]
+vizdoom = ["vizdoom==1.2.4"]
+procgen = ["procgen==0.10.7"]
+minerl = ["minerl @ git+https://github.com/minerllabs/minerl@v1.0.2"]
+dmc = ["shimmy==2.0.0", "dm_control==1.0.37", "mujoco==3.5.0"]
+atari = ["gymnasium[atari]", "ale-py==0.11.2"]
+metaworld = ["metaworld==3.0.0"]
+submission = ["metaworld==3.0.0", "shimmy==2.0.0", "dm_control==1.0.37", "mujoco==3.5.0"]
+all = [
+    "minigrid==2.3.1",
+    "vizdoom==1.2.4",
+    "procgen==0.10.7",
+    "minerl @ git+https://github.com/minerllabs/minerl@v1.0.2",
+    "shimmy==2.0.0",
+    "dm_control==1.0.37",
+    "mujoco==3.5.0",
+    "gymnasium[atari]",
+    "ale-py==0.11.2",
+    "metaworld==3.0.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["ifo", "ifo.*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ifo.__init__.__version__" }
+readme = { file = ["README.md"], content-type = "text/markdown" }
+
+[project.urls]
+homepage = "https://example.com/example-package"
+repository = "https://example.com/example-package/repository"
+
+[tool.ruff]
+line-length = 120
+# Enable Pyflakes `E` and `F` codes by default.
+select = [
+    "E",
+    "W", # see: https://pypi.org/project/pycodestyle
+    "F", # see: https://pypi.org/project/pyflakes
+]
+ignore = [
+    "E731", # Do not assign a lambda expression, use a def
+    "E402", # Module level import not at top of file
+]
+# Exclude a variety of commonly ignored directories.
+exclude = [".git", "docs", "_notebooks", "examples"]
+ignore-init-module-imports = true
+
+# Black formatting
+[tool.black]
+line_length = 120
+include = '\.pyi?$'
+exclude = '''
+/(
+      \.eggs         # exclude a few common directories in the
+    | \.git          # root of the project
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+  )/
+'''
+
+# iSort
+[tool.isort]
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = true
+skip_gitignore = true

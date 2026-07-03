@@ -1,0 +1,19 @@
+defaults:
+  - slapo_default_stage_2
+  - _self_
+
+trainer:
+  max_epochs: 4
+
+env:
+  name: Meta-World/masked-MT1-button-press-v3
+
+module:
+  batch_size: 128
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 2e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 31250
+    eta_min: 0.0

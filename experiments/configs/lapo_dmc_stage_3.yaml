@@ -1,0 +1,11 @@
+defaults:
+  - lapo_default_stage_3
+  - _self_
+
+env:
+  name: dm_control/walker-walk-v0
+  num_envs: 16
+  block_size: 2
+
+module:
+  num_steps: 4096

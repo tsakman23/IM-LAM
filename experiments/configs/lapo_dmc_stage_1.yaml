@@ -1,0 +1,6 @@
+defaults:
+  - lapo_default_stage_1
+  - _self_
+
+env:
+  name: dm_control/walker-walk-v0

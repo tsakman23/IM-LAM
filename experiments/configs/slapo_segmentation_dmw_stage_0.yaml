@@ -1,0 +1,8 @@
+defaults:
+  - slapo_segmentation_default_stage_0
+  - _self_
+
+env:
+  name: Meta-World/masked-MT1-button-press-v3
+
+

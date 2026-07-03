@@ -1,0 +1,55 @@
+defaults:
+  - rl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: ppo
+  tags: [ppo, impala_encoder]
+
+trainer:
+  _target_: ifo.modules.ppo.trainer.PPOTrainer
+  validation_frequency: 1e6
+  validation_steps: 1e5
+  max_steps: 25e6
+
+env:
+  name: procgen-bigfish-v0
+  num_envs: 64
+  block_size: 1
+  step_trigger: 1e5
+
+dataset:
+  name: ${env.name}
+
+module:
+  _target_: ifo.modules.ppo.module.PPOModule
+  _recursive_: False
+  batch_size: 2048
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 5e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.0
+    total_iters: 36621
+  num_workers: 1
+  max_grad_norm: 0.5
+  num_steps: 16384
+  gamma: 0.999
+  gae_lambda: 0.95
+  update_epochs: 3
+  norm_advantage: True
+  clip_coef: 0.2
+  clip_vloss: True
+  entropy_coef: 0.01
+  value_loss_coef: 0.5
+
+net:
+  _target_: ifo.modules.ppo.nets.ImpalaActorCriticAgent
+  _partial_: True
+  channel_multiplier: 4

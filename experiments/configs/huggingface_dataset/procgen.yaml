@@ -1,0 +1,10 @@
+recorder:
+  _target_: ifo.modules.dataset.recorder.Recorder
+  exploration_mode: sample
+  max_train_steps: 9e6
+  max_test_steps: 1e6
+  cache_dir: /tmp/datasets
+  repo_id: NOT_WORKING/procgen
+  config_name: ???
+  max_shard_size: 10GB
+  private: True

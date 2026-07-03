@@ -1,0 +1,75 @@
+defaults:
+  - rl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-3
+
+logger:
+  project: lapo
+  job_type: policy
+  tags: [lapo, ppo, impala_encoder, stage_3]
+
+trainer:
+  _target_: ifo.modules.ppo.trainer.PPOTrainer
+  validation_frequency: 10000
+  validation_steps: 1e5
+  max_steps: 4e6
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-2
+
+env:
+  name: procgen-bigfish-v0
+  num_envs: 64
+  video_folder: videos
+  step_trigger: 1e5
+
+dataset:
+  name: ${env.name}
+
+module:
+  _target_: ifo.modules.lapo.module.LAPOPPOModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 1e-2
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.0
+    total_iters: 23437
+  num_workers: 1
+  max_grad_norm: 0.5
+  num_steps: 4096
+  gamma: 0.999
+  gae_lambda: 0.95
+  update_epochs: 3
+  norm_advantage: True
+  clip_coef: 0.2
+  clip_vloss: True
+  entropy_coef: 0.0025
+  value_loss_coef: 0.5
+
+net:
+  _target_: ifo.modules.lapo.nets.LAPOActorCriticAgent
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 128
+  idm_block_size: 3
+
+decoder_callback:
+  _target_: ifo.modules.lapo.callbacks.DecoderCallbackPPO
+  _recursive_: False
+  max_epochs: 3
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-3
+  batch_size: 2048
+  num_workers: 2
+  dataset_size: 1e4
+  start_steps: 1e4
+  end_steps: 4e5
+  end_update_every_iteration_steps: 5e4
+  update_frequency: 20
+  max_updates: 100

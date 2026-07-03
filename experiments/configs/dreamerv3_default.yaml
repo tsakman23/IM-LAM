@@ -1,0 +1,56 @@
+defaults:
+  - rl_default
+  - fabric/default
+  - logger/wandb
+  - net: dreamerv3_default
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: dreamerv3
+  tags: [dreamerv3, rssm_world_model]
+
+trainer:
+  _target_: ifo.modules.dreamerv3.trainer.DreamerV3Trainer
+  validation_frequency: 1e5
+  validation_steps: 1e5
+  max_steps: 1e6
+
+env:
+  name: dm_control/walker-walk-v0
+  num_envs: 16
+  block_size: null
+  step_trigger: 1e5
+  action_repeat: 2
+
+module:
+  _target_: ifo.modules.dreamerv3.module.DreamerV3Module
+  _recursive_: False
+  batch_size: 16
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 4e-5
+    eps: 1e-8
+  lr_scheduler: null
+  max_grad_norm: null
+  block_size: 64
+  horizon: 15
+  replay_ratio: 512
+  replay_buffer_size: 5e6
+  replay_buffer_memmap: False
+  gamma: 0.996996996996997  # From horizon = 333 -> gamma = 1 - 1 / 333
+  lmbda: 0.95
+  continuous_discounting: True
+  # Last parameters to inspect from the original implementation
+  free_nats: 1.0
+  dynamics_scale_factor: 1.0
+  representation_scale_factor: 0.5  # Increased from 0.1 to 0.5 for faster convergence.
+  reconstruction_scale_factor: 1.0
+  reward_scale_factor: 1.0
+  continue_scale_factor: 1.0
+  actor_scale_factor: 1.0
+  critic_scale_factor: 1.0
+  entropy_scale: 3e-4
+  target_network_update_freq: 1
+  tau: 0.02  # Update the target network parameters with exponential moving average: new_param = tau * source_param + (1 - tau) * old_param

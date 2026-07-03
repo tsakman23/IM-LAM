@@ -1,0 +1,19 @@
+defaults:
+  - ppo_default
+  - _self_
+
+
+trainer:
+  _target_: ifo.modules.ppo.trainer.PPOTrainer
+  validation_frequency: 1e5
+  max_steps: 1e6
+
+env:
+  name: dm_control/walker-walk-v0
+  num_envs: 16
+  block_size: 3
+
+module:
+  lr_scheduler:
+    total_iters: 1464
+  num_steps: 16384

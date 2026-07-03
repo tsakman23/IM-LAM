@@ -1,0 +1,40 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-0
+
+logger:
+  project: slapo
+  job_type: segmentation
+  tags: [slapo, u_net, segmentation, stage_0]
+
+trainer:
+  validation_frequency: 2000
+  validation_unit: step
+
+env:
+  name: dm_control/masked-cheetah-run-v0
+  block_size: 1
+
+dataset:
+  name: ${env.name}
+  block_size: 1
+
+module:
+  _target_: ifo.modules.slapo.module.SLAPOSegmentationModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 6e-4
+  num_workers: 8
+  max_grad_norm: 1
+
+net:
+  _target_: ifo.modules.slapo.nets.SLAPOSegmentationNet
+  _partial_: True
+  base_channels: 24
+

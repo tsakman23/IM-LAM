@@ -1,0 +1,40 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: bc
+  tags: [bc, mlp_policy, impala_encoder]
+
+env:
+  name: procgen-bigfish-v0
+
+dataset:
+  name: ${env.name}
+
+module:
+  _target_: ifo.modules.bc.module.BehaviorCloningModule
+  _recursive_: False
+  batch_size: 256
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-3
+  lr_scheduler: null
+  num_workers: 4
+  max_grad_norm: null
+
+net:
+  _target_: ifo.modules.bc.nets.ImpalaActorAgent
+  _partial_: True
+  channel_multiplier: 1
+
+rollout_callback:
+  _target_: ifo.modules.bc.callbacks.RolloutCallback
+  rollout_steps: 1e4
+  rollout_frequency: 1
+  rollout_exploration_mode: sample
+

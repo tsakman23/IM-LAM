@@ -1,0 +1,60 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - net: lapo_vqvae_quantizer
+  - _self_
+
+stage_run_id: ${run_id}-1
+
+logger:
+  project: lapo
+  job_type: inverse_dynamics_model
+  tags: [lapo, impala_encoder, unet_decoder, vq_vae_ema, stage_1]
+
+trainer:
+  validation_frequency: 1000
+  validation_unit: step
+
+env:
+  name: procgen-bigfish-v0
+  block_size: 3
+
+dataset:
+  name: ${env.name}
+  block_size: ${env.block_size}  # This describes o_{t-block_size+2} ... o_t, o_{t+1}
+
+module:
+  _target_: ifo.modules.lapo.module.LAPOIDMModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 6e-4
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.LinearLR
+    start_factor: 1.0
+    end_factor: 0.01
+    total_iters: 17578
+  num_workers: 8
+  max_grad_norm: null
+  vq_loss_scale_factor: 0.1
+  reconstruction_loss_scale_factor: 1.0
+  action_loss_scale_factor: 1.0
+
+net:
+  _target_: ifo.modules.lapo.nets.LAPOIDM
+  _partial_: True
+  channel_multiplier: 4
+  world_model:
+    # Config for LAPO world model from LAPO paper for discrete action spaces.
+    _target_: ifo.common.nets.world_model.UNetWorldModel
+    _partial_: True
+    base_channels: 24
+    # Config for LAPO world model from LAOM paper for continuous action spaces.
+    # _target_: ifo.common.nets.world_model.ImpalaWorldModel
+    # _partial_: True
+    # channel_multiplier: 6
+    # encoder_channels: [16, 32, 32]
+    # encoder_num_res_blocks: 2
+  use_orthogonal_init: False  # Only use for ImpalaWorldModel.

@@ -1,0 +1,59 @@
+defaults:
+  - sl_default
+  - fabric/default
+  - logger/wandb
+  - _self_
+
+stage_run_id: ${run_id}-3
+
+logger:
+  project: lapo
+  tags: [lapo, bc, impala_encoder, stage_3]
+
+trainer:
+  validation_unit: step
+  validation_frequency: 4999
+  max_epochs: null
+  max_steps: 25000
+  previous_stage_checkpoint: ${trainer.checkpoint_dir}/${run_id}-2
+
+env:
+  name: dm_control/masked-cheetah-run-distractor-low-v0
+  block_size: 3
+  num_envs: 4
+  video_folder: videos
+  step_trigger: 1e5
+
+dataset:
+  name: ${env.name}
+  subset_size: 128e3
+  block_size: ${env.block_size}
+
+module:
+  _target_: ifo.modules.bc.module.BehaviorCloningModule
+  _recursive_: False
+  batch_size: 512
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1e-3
+  lr_scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: 25000
+    eta_min: 0.0
+  num_workers: 8
+  max_grad_norm: 1
+
+net:
+  _target_: ifo.modules.lapo_bc.nets.LAPOBCActorAgent
+  _partial_: True
+  channel_multiplier: 4
+  code_dim: 128
+  hidden_dim: 256
+  box_head_distribution: "mse"
+  categorical_head_distribution: "categorical"
+
+rollout_callback:
+  _target_: ifo.modules.bc.callbacks.RolloutCallback
+  rollout_steps: 1e5
+  rollout_frequency: 1
+  rollout_exploration_mode: mode

@@ -3,6 +3,7 @@ import os
 from typing import Any, Optional
 
 import gymnasium as gym
+import mujoco
 import numpy as np
 from gymnasium.envs.mujoco.mujoco_rendering import MujocoRenderer
 from PIL import Image
@@ -418,11 +419,18 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
     def __init__(
         self,
         env: gym.Env,
+        object_body_names: Optional[list[str]] = None,
+        object_geom_ids: Optional[list[int]] = None,
     ) -> None:
         """Initialise the segmentation wrapper.
 
         Args:
             env: The base Metaworld Gymnasium environment to wrap.
+            object_body_names: Optional explicit list of MuJoCo body names whose
+                geoms make up the manipulated object. Overrides the automatic
+                movable-body heuristic used by :meth:`_get_object_geom_ids`.
+            object_geom_ids: Optional explicit list of geom IDs for the
+                manipulated object. Takes precedence over everything else.
         """
         super().__init__(env)
         self._render_mode = env.render_mode
@@ -448,15 +456,22 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
         # so that render() can isolate only the arm in the segmentation image.
         self._robot_geom_ids = self._get_robot_geom_ids()
 
-    def _get_robot_geom_ids(self) -> list[int]:
-        """Identify geom IDs belonging to the robot arm's kinematic chain.
+        # Pre-compute geom IDs of the manipulated object(s) for the object mask.
+        self._object_geom_ids = self._get_object_geom_ids(
+            object_body_names=object_body_names, object_geom_ids=object_geom_ids
+        )
+
+    def _get_robot_body_ids(self) -> set[int]:
+        """Body IDs of the robot arm's kinematic chain.
 
         Traverses the MuJoCo body tree starting from the robot's root body
-        (the first child of the world body whose name contains ``'base'``)
-        and collects all geom IDs attached to the robot's bodies.
+        (the first child of the world body whose name contains ``'base'``) and
+        collects every body in that subtree. Manipulated objects and static
+        scene bodies (table, walls, fixtures) hang off the world body rather
+        than off the robot, so they are naturally excluded.
 
         Returns:
-            A sorted list of integer geom IDs belonging to the robot arm.
+            The set of body IDs belonging to the robot arm.
         """
         model = self.unwrapped.model
 
@@ -478,8 +493,7 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
                     robot_root = child_id
                     break
 
-        # BFS to collect all body IDs in the robot's kinematic chain,
-        # pruning subtrees rooted at task-object bodies.
+        # BFS to collect all body IDs in the robot's kinematic chain.
         robot_body_ids: set[int] = set()
         if robot_root is not None:
             queue = [robot_root]
@@ -488,12 +502,74 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
                 robot_body_ids.add(body_id)
                 queue.extend(children[body_id])
 
-        # Map robot body IDs to their geom IDs.
-        robot_geom_ids = sorted(
+        return robot_body_ids
+
+    def _get_robot_geom_ids(self) -> list[int]:
+        """Geom IDs attached to the robot arm's kinematic chain.
+
+        Returns:
+            A sorted list of integer geom IDs belonging to the robot arm.
+        """
+        model = self.unwrapped.model
+        robot_body_ids = self._get_robot_body_ids()
+        return sorted(
             gid for gid in range(model.ngeom)
             if int(model.geom_bodyid[gid]) in robot_body_ids
         )
-        return robot_geom_ids
+
+    def _is_movable_wrt_world(self, body_id: int) -> bool:
+        """Whether any joint lies on the path from ``body_id`` up to the world.
+
+        Static scene bodies (table, walls, fixtures) are welded to the world and
+        have no such joint; manipulated objects (free-joint pucks/pegs, hinged
+        doors, sliding windows) do.
+        """
+        model = self.unwrapped.model
+        b = int(body_id)
+        while b != 0:
+            if int(model.body_jntnum[b]) > 0:
+                return True
+            b = int(model.body_parentid[b])
+        return False
+
+    def _get_object_geom_ids(
+        self,
+        object_body_names: Optional[list[str]] = None,
+        object_geom_ids: Optional[list[int]] = None,
+    ) -> list[int]:
+        """Identify geom IDs belonging to the manipulated object(s).
+
+        Resolution order:
+          1. explicit ``object_geom_ids`` if provided;
+          2. geoms of the bodies named in ``object_body_names`` if provided;
+          3. otherwise the automatic heuristic: every body that is not part of
+             the robot chain and is movable relative to the world (see
+             :meth:`_is_movable_wrt_world`). This selects the manipulated object
+             and excludes the robot, table, walls, and other static fixtures.
+
+        Returns:
+            A sorted list of integer geom IDs belonging to the object(s).
+        """
+        model = self.unwrapped.model
+
+        if object_geom_ids is not None:
+            return sorted(int(g) for g in object_geom_ids)
+
+        if object_body_names is not None:
+            wanted = set(object_body_names)
+            body_ids = {b for b in range(model.nbody) if model.body(b).name in wanted}
+        else:
+            robot_body_ids = self._get_robot_body_ids()
+            body_ids = {
+                b
+                for b in range(1, model.nbody)
+                if b not in robot_body_ids and self._is_movable_wrt_world(b)
+            }
+
+        return sorted(
+            gid for gid in range(model.ngeom)
+            if int(model.geom_bodyid[gid]) in body_ids
+        )
 
     def _render(self, segmentation: bool = False) -> np.ndarray:
         """Render an off-screen image via the custom MujocoRendererSegm.
@@ -536,5 +612,41 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
         img = np.zeros((segm.shape[0], segm.shape[1], 3), dtype=np.uint8)
         img[arm_mask] = 255
 
+        return img
+
+    def render_masks(self) -> dict[str, np.ndarray]:
+        """Render binary agent and object segmentation masks in a single pass.
+
+        Both masks come from one segmentation render, so they are mutually
+        exclusive and occlusion-correct: each pixel is labelled by the
+        front-most geom only. The agent mask is identical to what :meth:`render`
+        produces. The object mask additionally requires the pixel's object type
+        to be a geom, so that rendered sites (e.g. goal markers) cannot leak in.
+
+        Returns:
+            A dict with keys ``"agent"`` and ``"object"``, each a 3-channel
+            uint8 array of shape ``(height, width, 3)`` where present pixels are
+            255 and all others 0.
+        """
+        # segm shape: (H, W, 2) — channel 0 = object type, channel 1 = object ID.
+        segm = self._render(segmentation=True)
+        segm = np.rot90(segm, 2) if self._rot_180 else segm
+        obj_type = segm[:, :, 0]
+        geom_ids = segm[:, :, 1]
+
+        agent_mask = np.isin(geom_ids, self._robot_geom_ids)
+        is_geom = obj_type == mujoco.mjtObj.mjOBJ_GEOM
+        object_mask = np.isin(geom_ids, self._object_geom_ids) & is_geom
+
+        return {
+            "agent": self._binary_to_image(agent_mask),
+            "object": self._binary_to_image(object_mask),
+        }
+
+    @staticmethod
+    def _binary_to_image(mask: np.ndarray) -> np.ndarray:
+        """Convert a boolean (H, W) mask to a 3-channel uint8 image (255/0)."""
+        img = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+        img[mask] = 255
         return img
 

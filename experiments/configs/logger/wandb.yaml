@@ -1,5 +1,6 @@
 # Base config for logging with Weights and Biases.
 project: masklam
+entity: gtsakoumakis-newcastle-university
 group: null
 job_type: training
 name: null

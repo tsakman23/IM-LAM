@@ -45,9 +45,11 @@ def maybe_log_to_wandb(cfg: DictConfig, metrics: Dict[str, float]) -> None:
         return
     config = cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
     logger_conf = dict(config["logger"])
-    run_name = str(config.get("stage_run_id") or config.get("run_id"))
-    logger_conf["name"] = run_name
-    logger_conf["id"] = run_name + "___"
+    run_id = str(config.get("stage_run_id") or config.get("run_id"))
+    # Honor an explicitly-configured logger.name as the W&B display name; the run
+    # identity remains keyed on the run id so it never collides with the training runs.
+    logger_conf["name"] = logger_conf.get("name") or run_id
+    logger_conf["id"] = run_id + "___"
     tags = list(logger_conf.get("tags") or [])
     tags.append(str(config["env"]["name"])[:64])
     logger_conf["tags"] = tags

@@ -57,7 +57,10 @@ class Experiment(ABC):
         config = OmegaConf.to_container(cfg, resolve=True)
         assert isinstance(config, dict)
         logger_conf = config["logger"]
-        logger_conf["name"] = config["stage_run_id"]
+        # Honor an explicitly-configured logger.name as the W&B display name;
+        # otherwise fall back to the stage run id. The run identity / resume key
+        # is always the stage run id, independent of the display name.
+        logger_conf["name"] = logger_conf.get("name") or config["stage_run_id"]
         logger_conf["id"] = config["stage_run_id"]
         logger_conf["tags"] += [config["env"]["name"][:64]]  # Tags are limited to 64 characters.
         wandb_logger = WandbLogger(**logger_conf, config=config)

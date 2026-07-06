@@ -7,7 +7,7 @@ defaults:
 stage_run_id: ${run_id}-0
 
 logger:
-  project: slapo
+  project: masklam
   job_type: segmentation
   tags: [slapo, u_net, segmentation, stage_0]
 

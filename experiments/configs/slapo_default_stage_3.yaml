@@ -7,7 +7,7 @@ defaults:
 stage_run_id: ${run_id}-3
 
 logger:
-  project: slapo
+  project: masklam
   tags: [slapo, bc, impala_encoder, stage_3]
 
 trainer:

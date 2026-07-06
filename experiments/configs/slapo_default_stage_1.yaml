@@ -8,7 +8,7 @@ defaults:
 stage_run_id: ${run_id}-1
 
 logger:
-  project: slapo
+  project: masklam
   job_type: inverse_dynamics_model
   tags: [slapo, impala_encoder, impala_decoder, stage_1]
 

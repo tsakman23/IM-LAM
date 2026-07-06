@@ -77,13 +77,23 @@ def configure_fabric(cfg: DictConfig) -> Fabric:
     return fabric
 
 
-@hydra.main(version_base=None, config_path="../../experiments/configs", config_name="slapo_default_stage_3")
-def main(cfg: DictConfig) -> None:
-    add_legacy_features_to_vector_wrapper()
-    fabric = configure_fabric(cfg)
+def success_eval(cfg: DictConfig, fabric: Fabric) -> Dict[str, float]:
+    """Load the Stage-3 policy from ``trainer.previous_stage_checkpoint`` and roll it out.
 
+    Assumes ``add_legacy_features_to_vector_wrapper()`` has already been called and ``fabric``
+    is launched. Pure: returns numeric metrics with no logging side effects, so it can be
+    reused by the in-process pipeline (which logs them under an ``eval/`` prefix) and by the
+    standalone CLI below.
+
+    Args:
+        cfg (DictConfig): A Stage-3 config whose ``trainer.previous_stage_checkpoint`` points
+            at the trained Stage-3 checkpoint (``${run_id}-3``).
+        fabric (Fabric): A launched Fabric instance.
+
+    Returns:
+        Dict[str, float]: ``episode_success_rate``, ``episode_return``, ``episode_length``.
+    """
     checkpoint_path = resolve_required_checkpoint(cfg)
-
     env = hydra.utils.instantiate(cfg.env, num_envs=cfg.env.num_envs)
     try:
         net = hydra.utils.instantiate(cfg.net)(
@@ -112,21 +122,26 @@ def main(cfg: DictConfig) -> None:
             exploration_mode=exploration_mode,
             reset_before_rollout=True,
         )
-
-        metrics = {
-            "val/episode_success_rate": float(success_rate),
-            "val/episode_return": episode_return,
-            "val/episode_length": episode_length,
+        return {
+            "episode_success_rate": float(success_rate),
+            "episode_return": float(episode_return),
+            "episode_length": float(episode_length),
         }
-        print(f"run_id={cfg.run_id}")
-        print(f"env={cfg.env.name}")
-        print(f"previous_stage_checkpoint={checkpoint_path}")
-        print(f"success_rate={success_rate:.6f}")
-        print(f"episode_return={episode_return:.6f}")
-        print(f"episode_length={episode_length:.6f}")
-        maybe_log_to_wandb(cfg, metrics)
     finally:
         env.close()
+
+
+@hydra.main(version_base=None, config_path="../../experiments/configs", config_name="slapo_default_stage_3")
+def main(cfg: DictConfig) -> None:
+    add_legacy_features_to_vector_wrapper()
+    fabric = configure_fabric(cfg)
+    metrics = success_eval(cfg, fabric)
+    print(f"run_id={cfg.run_id}")
+    print(f"env={cfg.env.name}")
+    print(f"success_rate={metrics['episode_success_rate']:.6f}")
+    print(f"episode_return={metrics['episode_return']:.6f}")
+    print(f"episode_length={metrics['episode_length']:.6f}")
+    maybe_log_to_wandb(cfg, {f"val/{key}": value for key, value in metrics.items()})
 
 
 if __name__ == "__main__":

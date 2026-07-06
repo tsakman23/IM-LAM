@@ -73,22 +73,19 @@ class RolloutCallback:
             store_data=False,
         )
 
-        trainer.fabric.log(
-            "val/env_throughput",
-            self.rollout_steps * self.num_envs * trainer.fabric.world_size / (time() - start_time),
-            step=trainer.global_step,
+        trainer._log(
+            {"val/env_throughput": self.rollout_steps * self.num_envs * trainer.fabric.world_size / (time() - start_time)}
         )
 
         # Get and log training rewards and episode lengths
         if episode_return is not None:
             episode_returns(episode_return)
             episode_lengths(episode_length)
-            trainer.fabric.log_dict(
+            trainer._log(
                 {
                     "val/episode_return": episode_returns.compute(),
                     "val/episode_length": episode_lengths.compute(),
-                },
-                step=trainer.global_step,
+                }
             )
             trainer._format_iterable(pbar, {"return": episode_returns.compute()}, "val")
 

@@ -30,6 +30,7 @@ class LightningTrainer(ABC):
         validation_criteria: Literal["min", "max"] = "min",
         validation_unit: Literal["iteration", "epoch", "step"] = "epoch",
         random_seed: Optional[int] = None,
+        log_prefix: Optional[str] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -54,10 +55,33 @@ class LightningTrainer(ABC):
         self.validation_criteria = validation_criteria
         self.validation_unit = validation_unit
         self.random_seed = random_seed
+        self.log_prefix = log_prefix
         self._current_val_loss = float("inf") if validation_criteria == "min" else -float("inf")
         self._prev_val_loss = float("inf") if validation_criteria == "min" else -float("inf")
         self._current_train_loss = float("inf") if validation_criteria == "min" else -float("inf")
         self._prev_train_loss = float("inf") if validation_criteria == "min" else -float("inf")
+
+    def _log(self, metrics: Dict[str, Any]) -> None:
+        """Log a metrics dict to the active logger.
+
+        When ``log_prefix`` is set (in-process multi-stage pipeline), keys are prefixed
+        as ``{log_prefix}/{key}`` and a per-stage, 0-based x-axis is emitted as
+        ``{log_prefix}/step``; the native W&B step is intentionally left unset so a single
+        run can hold several stages without a monotonic-step conflict (the orchestrator
+        registers ``wandb.define_metric(f"{prefix}/*", step_metric=f"{prefix}/step")``).
+        When ``log_prefix`` is ``None``, the legacy behavior (native ``step=global_step``,
+        unprefixed keys) is preserved so other experiments are unaffected.
+
+        Args:
+            metrics (Dict[str, Any]): Metric name -> value (names already carry any
+                ``train/`` / ``val/`` / ``trainer/`` sub-prefix).
+        """
+        if self.log_prefix:
+            payload = {f"{self.log_prefix}/{key}": value for key, value in metrics.items()}
+            payload[f"{self.log_prefix}/step"] = self.global_step
+            self.fabric.log_dict(payload)
+        else:
+            self.fabric.log_dict(metrics, step=self.global_step)
 
     @abstractmethod
     def fit(self, *args, **kwargs) -> None:
@@ -458,7 +482,7 @@ class SupervisedTrainer(LightningTrainer):
             desc="Trainer",
         )
         while self.global_step < self.max_steps:
-            self.fabric.log("trainer/epoch", self.global_epoch, step=self.global_step)
+            self._log({"trainer/epoch": self.global_epoch})
             step_before = self.global_step
             self.train_loop(model, optimizer, train_loader, val_loader, lr_scheduler, state)
             steps_done = self.global_step - step_before
@@ -517,7 +541,7 @@ class SupervisedTrainer(LightningTrainer):
         )
 
         for epoch in trainer_pbar:
-            self.fabric.log("trainer/epoch", self.global_epoch, step=self.global_step)
+            self._log({"trainer/epoch": self.global_epoch})
             self.train_loop(model, optimizer, train_loader, val_loader, lr_scheduler, state)
             self.fabric.call("train_loop_end", **rename_key(locals(), "self", "trainer"))
 
@@ -577,16 +601,15 @@ class SupervisedTrainer(LightningTrainer):
             if model.max_grad_norm is not None:
                 self.fabric.call("before_clip_grad", **rename_key(locals(), "self", "trainer"))
                 total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), model.max_grad_norm)
-                self.fabric.log("train/total_grad_norm", total_grad_norm, step=self.global_step)
+                self._log({"train/total_grad_norm": total_grad_norm})
 
             self.fabric.call("before_optimizer_step", **rename_key(locals(), "self", "trainer"))
             optimizer.step()
 
             # Log metrics.
-            self.fabric.log_dict({f"train/{k}": v for k, v in step_dict.items()}, step=self.global_step)
-            self.fabric.log_dict(
-                {"trainer/global_step": self.global_step, "train/learning_rate": optimizer.param_groups[0]["lr"]},
-                step=self.global_step,
+            self._log({f"train/{k}": v for k, v in step_dict.items()})
+            self._log(
+                {"trainer/global_step": self.global_step, "train/learning_rate": optimizer.param_groups[0]["lr"]}
             )
 
             if lr_scheduler is not None:
@@ -599,7 +622,7 @@ class SupervisedTrainer(LightningTrainer):
 
             # Log throughput.
             throughput(batch.shape[0] / (time() - start_time))
-            self.fabric.log("train/throughput", throughput.compute() * self.fabric.world_size, step=self.global_step)
+            self._log({"train/throughput": throughput.compute() * self.fabric.world_size})
             self.fabric.call("train_batch_end", **rename_key(locals(), "self", "trainer"))
 
             if self.should_validate("step"):
@@ -657,9 +680,9 @@ class SupervisedTrainer(LightningTrainer):
             self.fabric.call("val_batch_end", **rename_key(locals(), "self", "trainer"))
 
         # Log validation metrics.
-        self.fabric.log("val/throughput", throughput.compute() * self.fabric.world_size, step=self.global_step)
+        self._log({"val/throughput": throughput.compute() * self.fabric.world_size})
         assert mean_metrics is not None, "No validation metrics were computed."
-        self.fabric.log_dict({f"val/{k}": v.compute() for k, v in mean_metrics.items()}, step=self.global_step)
+        self._log({f"val/{k}": v.compute() for k, v in mean_metrics.items()})
 
         self.fabric.call("val_epoch_end", **rename_key(locals(), "self", "trainer"))
         assert mean_metrics is not None, "No validation metrics were computed."

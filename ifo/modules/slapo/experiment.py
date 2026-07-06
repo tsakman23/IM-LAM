@@ -1,15 +1,11 @@
-import os
-
 import hydra
 import torch
 from omegaconf import DictConfig
 
 from ifo.common.experiment import Experiment
 from ifo.common.transforms.debug import get_debug_transform
-from ifo.common.utils.hydra import hydra_main_multistage
 from ifo.common.utils.utility import (
     Conditional,
-    add_legacy_features_to_vector_wrapper,
     get_latest_checkpoint,
     requires_grad,
 )
@@ -28,6 +24,25 @@ class SLAPOExperiment(Experiment):
         "stage_2": "slapo_default_stage_2",
         "stage_3": "slapo_default_stage_3",
     }
+
+    # Shared Fabric + W&B run injected by the in-process orchestrator (experiments/run_slapo.py).
+    # When set, every stage reuses one Fabric and logs to one W&B run; per-stage metric
+    # prefixing / 0-based step axes are handled via each stage's trainer.log_prefix override.
+    _shared_fabric = None
+    _shared_run = None
+
+    def _configure_fabric(self, cfg: DictConfig):
+        """Reuse the orchestrator's shared Fabric when present, seeding per stage."""
+        if self._shared_fabric is not None:
+            self._configure_seed(cfg, self._shared_fabric)
+            return self._shared_fabric
+        return super()._configure_fabric(cfg)
+
+    def _configure_wandb_logging(self, fabric, cfg: DictConfig) -> None:
+        """Skip per-stage W&B init when the orchestrator already opened the shared run."""
+        if self._shared_run is not None:
+            return
+        super()._configure_wandb_logging(fabric, cfg)
 
     def stage_0(self, cfg: DictConfig) -> None:
         """Train UNet-based binary segmentation model on ground-truth masks."""
@@ -210,14 +225,5 @@ class SLAPOExperiment(Experiment):
         val_env.close()
 
 
-@hydra_main_multistage(
-    version_base=None, config_path=f"{os.getcwd()}/experiments/configs", config_name=SLAPOExperiment.config
-)
-def main(cfg: DictConfig, stage: str):
-    experiment = SLAPOExperiment()
-    add_legacy_features_to_vector_wrapper()
-    getattr(experiment, stage)(cfg)
-
-
-if __name__ == "__main__":
-    main()
+# The multi-stage pipeline is driven in-process by experiments/run_slapo.py (one process,
+# one W&B run). The former subprocess-per-stage entry point has been removed.

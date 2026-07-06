@@ -19,6 +19,9 @@ trainer:
   # Path to load a specific checkpoint from. Overrides automatic loading from checkpoint_dir.
   checkpoint_path: null
   random_seed: null
+  # Metric prefix / per-stage 0-based W&B step axis, set per stage by the in-process pipeline
+  # runner (experiments/run_slapo.py). null = legacy single-stage logging (native step, unprefixed).
+  log_prefix: null
 
 env:
   _target_: ifo.common.utils.env.make_env

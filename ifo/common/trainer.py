@@ -76,10 +76,16 @@ class LightningTrainer(ABC):
             metrics (Dict[str, Any]): Metric name -> value (names already carry any
                 ``train/`` / ``val/`` / ``trainer/`` sub-prefix).
         """
-        if self.log_prefix:
+        run = getattr(self.fabric, "_pipeline_run", None)
+        if self.log_prefix and run is not None:
+            # In-process pipeline: log to the raw W&B run so our per-stage
+            # define_metric(f"{prefix}/*", step_metric=f"{prefix}/step") governs the x-axis
+            # and wandb's internal step auto-increments monotonically across stages. (Routing
+            # through the fabric WandbLogger would force every metric onto its own
+            # `trainer/global_step` x-axis, which we never advance.)
             payload = {f"{self.log_prefix}/{key}": value for key, value in metrics.items()}
             payload[f"{self.log_prefix}/step"] = self.global_step
-            self.fabric.log_dict(payload)
+            run.log(payload)
         else:
             self.fabric.log_dict(metrics, step=self.global_step)
 

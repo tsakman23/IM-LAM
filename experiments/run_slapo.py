@@ -19,9 +19,9 @@ from typing import List, Optional, Tuple
 import coolname
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
-import wandb
 from lightning.fabric import Fabric
 from omegaconf import DictConfig, OmegaConf
+from wandb.integration.lightning.fabric import WandbLogger
 
 from ifo.common.runner import Runner
 from ifo.common.utils.utility import add_legacy_features_to_vector_wrapper, display_banner
@@ -115,13 +115,10 @@ def main() -> None:
     logger_conf["name"] = run_id
     logger_conf["id"] = run_id
     logger_conf["tags"] = list(logger_conf.get("tags") or []) + [str(base_cfg.env.name)[:64]]
-    run = wandb.init(**logger_conf, config=OmegaConf.to_container(base_cfg, resolve=True))
-    fabric = Fabric(**OmegaConf.to_container(base_cfg.fabric, resolve=True))
+    wandb_logger = WandbLogger(**logger_conf, config=OmegaConf.to_container(base_cfg, resolve=True))
+    fabric = Fabric(**OmegaConf.to_container(base_cfg.fabric, resolve=True), loggers=[wandb_logger])
     fabric.launch()
-    # Expose the raw run to the trainer/callbacks so they log with per-stage step axes
-    # (see SupervisedTrainer._log). We deliberately do NOT attach a fabric WandbLogger,
-    # whose define_metric("*", step_metric="trainer/global_step") would hijack the x-axis.
-    fabric._pipeline_run = run
+    run = wandb_logger.experiment  # raw wandb.Run, for the final eval logging + finish()
 
     add_legacy_features_to_vector_wrapper()
     experiment = SLAPOExperiment()
@@ -132,8 +129,6 @@ def main() -> None:
         cfg = base_cfg if stage == selected[0] else _compose_stage(
             stage, global_overrides, stage_args, run_id, checkpoint_dir
         )
-        run.define_metric(f"{stage}/step")
-        run.define_metric(f"{stage}/*", step_metric=f"{stage}/step")
         print(f"[pipeline] ===== {stage} =====")
         getattr(experiment, stage)(cfg)
 
@@ -145,7 +140,8 @@ def main() -> None:
         )
         print(f"[pipeline] ===== eval (checkpoint {checkpoint}) =====")
         metrics = success_eval(eval_cfg, fabric)
-        run.log({f"eval/{key}": value for key, value in metrics.items()})
+        final_step = getattr(fabric, "_pipeline_step_offset", 0)
+        run.log({**{f"eval/{key}": value for key, value in metrics.items()}, "trainer/global_step": final_step})
         print(f"[pipeline] eval: {metrics}")
 
     run.finish()

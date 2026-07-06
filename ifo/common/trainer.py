@@ -64,11 +64,12 @@ class LightningTrainer(ABC):
     def _log(self, metrics: Dict[str, Any]) -> None:
         """Log a metrics dict to the active logger.
 
-        When ``log_prefix`` is set (in-process multi-stage pipeline), keys are prefixed
-        as ``{log_prefix}/{key}`` and a per-stage, 0-based x-axis is emitted as
-        ``{log_prefix}/step``; the native W&B step is intentionally left unset so a single
-        run can hold several stages without a monotonic-step conflict (the orchestrator
-        registers ``wandb.define_metric(f"{prefix}/*", step_metric=f"{prefix}/step")``).
+        When ``log_prefix`` is set (in-process multi-stage pipeline), keys are prefixed as
+        ``{log_prefix}/{key}`` and logged on a single **cumulative, monotonic**
+        ``trainer/global_step`` axis so one W&B run holds every stage. The cumulative offset
+        (``fabric._pipeline_step_offset``, advanced by :meth:`fit` after each stage) keeps the
+        x-axis increasing across stages; the trainer's internal ``global_step`` still resets per
+        stage (used for checkpointing / the LR scheduler), so no training logic depends on this.
         When ``log_prefix`` is ``None``, the legacy behavior (native ``step=global_step``,
         unprefixed keys) is preserved so other experiments are unaffected.
 
@@ -76,16 +77,10 @@ class LightningTrainer(ABC):
             metrics (Dict[str, Any]): Metric name -> value (names already carry any
                 ``train/`` / ``val/`` / ``trainer/`` sub-prefix).
         """
-        run = getattr(self.fabric, "_pipeline_run", None)
-        if self.log_prefix and run is not None:
-            # In-process pipeline: log to the raw W&B run so our per-stage
-            # define_metric(f"{prefix}/*", step_metric=f"{prefix}/step") governs the x-axis
-            # and wandb's internal step auto-increments monotonically across stages. (Routing
-            # through the fabric WandbLogger would force every metric onto its own
-            # `trainer/global_step` x-axis, which we never advance.)
+        if self.log_prefix:
             payload = {f"{self.log_prefix}/{key}": value for key, value in metrics.items()}
-            payload[f"{self.log_prefix}/step"] = self.global_step
-            run.log(payload)
+            offset = getattr(self.fabric, "_pipeline_step_offset", 0)
+            self.fabric.log_dict(payload, step=offset + self.global_step)
         else:
             self.fabric.log_dict(metrics, step=self.global_step)
 
@@ -442,6 +437,11 @@ class SupervisedTrainer(LightningTrainer):
                     state,
                     val_dataset,
                 )
+
+        # Advance the pipeline's cumulative W&B step so the next in-process stage continues
+        # monotonically on the trainer/global_step axis (single-run pipeline). No-op otherwise.
+        if self.log_prefix is not None:
+            self.fabric._pipeline_step_offset = getattr(self.fabric, "_pipeline_step_offset", 0) + self.global_step
 
         # Reset for next fit call.
         self.should_stop = False

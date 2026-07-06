@@ -22,6 +22,8 @@ The main experiments are organized by research question:
 
 The `_success` scripts should be run **after** the corresponding non-`_success` script. They do not retrain the model; they load the checkpoint produced by the training run and perform rollouts to compute downstream success metrics, especially for Distracting Meta-World (DMW).
 
+Note: `experiments/run_slapo.py` now runs this rollout evaluation **inline** at the end of its pipeline (logged under `eval/` in the same run), so for SLAPO the separate `_success` step is only needed to re-score an existing checkpoint or to evaluate with different rollout settings. The LAPO baseline (`run_lapo_bc.py`) still uses the separate `eval_lapo.py` helper.
+
 ## Requirements
 
 - Python >= 3.10
@@ -95,13 +97,15 @@ export MUJOCO_GL=egl
 
 `SLAPO` is the implementation name for MaskLAM. It keeps the LAPO training pipeline but masks the Stage 1 forward-dynamics reconstruction loss so that the latent action is trained from agent pixels rather than distractor pixels.
 
-The main SLAPO entry point is:
+The main SLAPO entry point runs the **entire pipeline in a single process and a single Weights & Biases run** - Stage 1 (IDM), Stage 2 (latent policy), Stage 3 (behavior cloning), followed by a rollout success evaluation:
 
 ```bash
 python experiments/run_slapo.py
 ```
 
-The success-rollout helper for SLAPO is:
+Each stage logs under its own metric prefix with a 0-based step axis (`stage_1/`, `stage_2/`, `stage_3/`), and the final rollout eval logs under `eval/` (e.g. `eval/episode_success_rate`). Per-stage checkpoints are still written to `./checkpoints/<run_id>-<stage>`. The rollout eval runs automatically after Stage 3; pass `eval=false` to skip it.
+
+For evaluating an existing Stage-3 checkpoint on its own (for example, re-scoring a finished run), use the standalone success-rollout helper:
 
 ```bash
 python scripts/submission2026/eval_slapo.py
@@ -125,7 +129,7 @@ Use the LAPO configs, for example `lapo_bc_dcs_stage_1`, `lapo_bc_dcs_stage_2`, 
 
 ## General Hydra usage
 
-Experiments use Hydra configs. A full pipeline can be run with per-stage configs:
+Experiments use Hydra configs. The full pipeline runs in one process and one W&B run; you provide a per-stage config for each stage:
 
 ```bash
 python experiments/run_slapo.py \
@@ -136,7 +140,9 @@ python experiments/run_slapo.py \
   --stage stage_3 -cn slapo_default_stage_3
 ```
 
-To run only selected stages:
+This trains the three stages sequentially in-process and then runs the rollout eval (add `eval=false` to skip). All metrics land in a single run, grouped by stage (`stage_1/`, `stage_2/`, `stage_3/`, `eval/`), each with its own 0-based step axis.
+
+To run only selected stages (checkpoints from earlier stages are resolved from `./checkpoints/<run_id>-<stage>`):
 
 ```bash
 python experiments/run_slapo.py \

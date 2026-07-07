@@ -1,3 +1,8 @@
+# DEPRECATED for DMW: this generic PPO/Lightning recorder is NOT the pipeline used
+# to build the Distracting Meta-World datasets. Use the standalone repo
+# `distracting-metaworld-dataset-main` (generate_dataset_huggingface.py) instead.
+# Kept importable for the DCS/PPO path only.
+
 from itertools import chain
 from typing import Dict, Optional, Union
 

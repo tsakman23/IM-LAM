@@ -520,12 +520,9 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
     def __init__(
         self,
         env: gym.Env,
+        object_body_names: Optional[list[str]] = None,
+        object_geom_ids: Optional[list[int]] = None,
     ) -> None:
-        """Initialise the segmentation wrapper.
-
-        Args:
-            env: The base Metaworld Gymnasium environment to wrap.
-        """
         super().__init__(env)
         self._render_mode = env.render_mode
         self._height = env.unwrapped.height
@@ -540,15 +537,13 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
             height=self._height,
             width=self._width,
         )
-        # see: https://github.com/Farama-Foundation/Metaworld/pull/370
-        # WARN: for some reason this may lead to change of goal on second state after the reset!
         self.unwrapped.seeded_rand_vec = True
         self.unwrapped._freeze_rand_vec = False
 
-
-        # Pre-compute geom IDs belonging to the robot arm's kinematic chain
-        # so that render() can isolate only the arm in the segmentation image.
         self._robot_geom_ids = self._get_robot_geom_ids()
+        self._object_geom_ids = self._get_object_geom_ids(
+            object_body_names=object_body_names, object_geom_ids=object_geom_ids
+        )
 
     def _get_robot_geom_ids(self) -> list[int]:
         """Identify geom IDs belonging to the robot arm's kinematic chain.
@@ -639,4 +634,78 @@ class SegmentationMetaworldWrapper(gym.Wrapper):
         img[arm_mask] = 255
 
         return img
+
+    def _get_robot_body_ids(self) -> set[int]:
+        model = self.unwrapped.model
+        children: dict[int, list[int]] = {i: [] for i in range(model.nbody)}
+        for i in range(1, model.nbody):
+            children[int(model.body_parentid[i])].append(i)
+        robot_root = None
+        for child_id in children[0]:
+            if "base" in model.body(child_id).name.lower():
+                robot_root = child_id
+                break
+        if robot_root is None:
+            for child_id in children[0]:
+                if children[child_id]:
+                    robot_root = child_id
+                    break
+        robot_body_ids: set[int] = set()
+        if robot_root is not None:
+            queue = [robot_root]
+            while queue:
+                body_id = queue.pop(0)
+                robot_body_ids.add(body_id)
+                queue.extend(children[body_id])
+        return robot_body_ids
+
+    def _is_movable_wrt_world(self, body_id: int) -> bool:
+        model = self.unwrapped.model
+        b = int(body_id)
+        while b != 0:
+            if int(model.body_jntnum[b]) > 0:
+                return True
+            b = int(model.body_parentid[b])
+        return False
+
+    def _get_object_geom_ids(
+        self,
+        object_body_names: Optional[list[str]] = None,
+        object_geom_ids: Optional[list[int]] = None,
+    ) -> list[int]:
+        model = self.unwrapped.model
+        if object_geom_ids is not None:
+            return sorted(int(g) for g in object_geom_ids)
+        if object_body_names is not None:
+            wanted = set(object_body_names)
+            body_ids = {b for b in range(model.nbody) if model.body(b).name in wanted}
+        else:
+            robot_body_ids = self._get_robot_body_ids()
+            body_ids = {
+                b for b in range(1, model.nbody)
+                if b not in robot_body_ids and self._is_movable_wrt_world(b)
+            }
+        return sorted(
+            gid for gid in range(model.ngeom)
+            if int(model.geom_bodyid[gid]) in body_ids
+        )
+
+    @staticmethod
+    def _binary_to_image(mask: np.ndarray) -> np.ndarray:
+        img = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+        img[mask] = 255
+        return img
+
+    def render_masks(self) -> dict[str, np.ndarray]:
+        segm = self._render(segmentation=True)
+        segm = np.rot90(segm, 2) if self._rot_180 else segm
+        obj_type = segm[:, :, 0]
+        geom_ids = segm[:, :, 1]
+        agent_mask = np.isin(geom_ids, self._robot_geom_ids)
+        is_geom = obj_type == mujoco.mjtObj.mjOBJ_GEOM
+        object_mask = np.isin(geom_ids, self._object_geom_ids) & is_geom
+        return {
+            "agent": self._binary_to_image(agent_mask),
+            "object": self._binary_to_image(object_mask),
+        }
 

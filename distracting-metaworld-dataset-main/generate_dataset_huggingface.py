@@ -144,6 +144,14 @@ def _task_slug(env_id: str) -> str:
     return part[len("MT1-"):] if part.startswith("MT1-") else part
 
 
+# Per-task object-body overrides for the object mask. Empty = use the automatic
+# movable-w.r.t.-world heuristic. Populate only when an overlay check shows the
+# heuristic selects the wrong body (find names via env.unwrapped.model.body(i).name).
+TASK_OBJECT_OVERRIDES: dict[str, list[str]] = {
+    # e.g. "door-open-v3": ["door_link"],
+}
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Paired environment
 # ────────────────────────────────────────────────────────────────────────────
@@ -266,6 +274,7 @@ def episode_generator(
         camera_name=camera_name,
         background_dataset_path=background_dataset_path,
         seed=base_seed,
+        object_body_names=TASK_OBJECT_OVERRIDES.get(_task_slug(env_name)),
     )
     _first_log   = True
     total_steps  = 0

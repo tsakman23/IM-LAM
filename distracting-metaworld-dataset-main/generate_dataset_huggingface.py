@@ -70,7 +70,7 @@ FEATURES = Features({
     "mask":                   HFImage(),
     "object_mask":            HFImage(),
     "state":                  Sequence(Value("float32"), length=STATE_DIM),
-    "object_state":           Sequence(Value("float32")),
+    "object_state":           Sequence(Value("float32")),   # variable: block-concat [all obj pos; all obj quat] (push-v3: pos3+quat4=7)
     "action":                 Sequence(Value("float32"), length=ACTION_DIM),
     "reward":                 Value("float32"),
     "terminated":             Value("bool"),

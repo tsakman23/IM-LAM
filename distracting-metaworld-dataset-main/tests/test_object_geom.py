@@ -24,6 +24,7 @@ def test_render_masks_agent_matches_legacy_arm_mask():
     masks = env.call("render_masks")[0]
     agent_fg = masks["agent"][:, :, 0] > 0
     assert agent_fg.shape == legacy_fg.shape
+    assert agent_fg.sum() > 0, "agent mask unexpectedly empty (test would pass vacuously)"
     assert np.array_equal(agent_fg, legacy_fg), "render_masks agent must equal legacy arm mask"
     env.close()
 

@@ -26,7 +26,7 @@ def stream(repo: str, config: str, split: str, n: int, out: str) -> None:
         cols["reward"].append(np.float32(row["reward"]))
         cols["terminated"].append(bool(row["terminated"]))
         cols["truncated"].append(bool(row["truncated"]))
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     np.savez_compressed(out, **{k: np.asarray(v) for k, v in cols.items()})
     print(f"Saved {len(cols['observation'])} released rows to {out}")
 

@@ -44,6 +44,7 @@ def make_metaworld_env(
     segmentation: bool = False,
     seed: Optional[int] = None,
     dataset_videos: Optional[str] = "train",
+    object_body_names: Optional[list] = None,
     **kwargs,
 ) -> VectorEnv:
     """Erstellt eine Meta-World Umgebung."""
@@ -74,7 +75,7 @@ def make_metaworld_env(
         wrappers.insert(0, partial(DistractingMetaworldWrapper, dataset_path=f"{background_dataset_path}/JPEGImages/480p", dataset_videos=dataset_videos))
     
     if segmentation:
-        wrappers.insert(0, SegmentationMetaworldWrapper)
+        wrappers.insert(0, partial(SegmentationMetaworldWrapper, object_body_names=object_body_names))
 
     env_kwargs = {
         "wrappers": wrappers,

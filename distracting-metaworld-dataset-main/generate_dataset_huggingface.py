@@ -57,7 +57,7 @@ from make_env import make_metaworld_env
 # ────────────────────────────────────────────────────────────────────────────
 
 # REPO_ID     = "EpicPinkPenguin/visual_distracting_metaworld"
-REPO_ID     = "tsakman23/visual_distracting_metaworld_test" 
+REPO_ID     = "tsakman23/visual_distracting_metaworld"
 IMG_HW      = 128
 STATE_DIM   = 39
 ACTION_DIM  = 4
@@ -65,14 +65,16 @@ ACTION_DIM  = 4
 # HuggingFace feature schema.
 # mask is stored as single-channel PIL "L" images – HFImage() accepts any PIL mode.
 FEATURES = Features({
-    "observation":      HFImage(),                              # RGB  vanilla
-    "observation_distracted": HFImage(),                              # RGB  DAVIS-distracted
-    "mask":             HFImage(),                              # L    single-channel arm mask
-    "state":            Sequence(Value("float32"), length=STATE_DIM),
-    "action":           Sequence(Value("float32"), length=ACTION_DIM),
-    "reward":           Value("float32"),
-    "terminated":       Value("bool"),
-    "truncated":        Value("bool"),
+    "observation":            HFImage(),
+    "observation_distracted": HFImage(),
+    "mask":                   HFImage(),
+    "object_mask":            HFImage(),
+    "state":                  Sequence(Value("float32"), length=STATE_DIM),
+    "object_state":           Sequence(Value("float32")),
+    "action":                 Sequence(Value("float32"), length=ACTION_DIM),
+    "reward":                 Value("float32"),
+    "terminated":             Value("bool"),
+    "truncated":              Value("bool"),
 })
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -168,6 +170,7 @@ class PairedEnv:
         camera_name: str = "corner",
         background_dataset_path: str = "datasets/DAVIS",
         seed: Optional[int] = None,
+        object_body_names: Optional[list] = None,
     ) -> None:
         davis_split = "train" if split == "train" else "val"
 
@@ -188,7 +191,10 @@ class PairedEnv:
             background_dataset_path=background_dataset_path,
             dataset_videos=davis_split,
         )
-        self._segmentation = make_metaworld_env(**common, distracting=False, segmentation=True)
+        self._segmentation = make_metaworld_env(
+            **common, distracting=False, segmentation=True,
+            object_body_names=object_body_names,
+        )
 
     def reset(self, seed: Optional[int] = None) -> dict:
         obs_v, info_v = self._vanilla.reset(seed=seed)
@@ -214,13 +220,25 @@ class PairedEnv:
         img_van  = _extract_image(obs_v)
         img_dis  = _extract_image(obs_d)
         seg_arr  = _extract_image(obs_s)
-        state    = obs_v["state"][0].astype(np.float32)    # strip batch dim
-        mask_arr = _make_mask(seg_arr)                     # (H, W) uint8
+        state    = obs_v["state"][0].astype(np.float32)
+        mask_arr = _make_mask(seg_arr)                     # agent, UNCHANGED
+
+        # Object mask: read-only segmentation render on the seg env's current state.
+        masks = self._segmentation.call("render_masks")[0]
+        object_mask_arr = masks["object"][:, :, 0].astype(np.uint8)  # (H, W) 0/255
+
+        # Object state: world-frame pos + quat from the vanilla env's current state.
+        obj_pos  = np.asarray(self._vanilla.call("_get_pos_objects")[0], dtype=np.float32).ravel()
+        obj_quat = np.asarray(self._vanilla.call("_get_quat_objects")[0], dtype=np.float32).ravel()
+        object_state = np.concatenate([obj_pos, obj_quat]).astype(np.float32)
+
         return {
-            "img_van":  img_van,
-            "img_dis":  img_dis,
-            "mask_arr": mask_arr,
-            "state":    state,
+            "img_van":      img_van,
+            "img_dis":      img_dis,
+            "mask_arr":     mask_arr,
+            "object_mask":  object_mask_arr,
+            "state":        state,
+            "object_state": object_state,
         }
 
 
@@ -272,6 +290,7 @@ def episode_generator(
             pil_obs  = Image.fromarray(obs["img_van"],  mode="RGB")
             pil_dist = Image.fromarray(obs["img_dis"],  mode="RGB")
             pil_mask = Image.fromarray(obs["mask_arr"], mode="L")   # single channel
+            pil_object_mask = Image.fromarray(obs["object_mask"], mode="L")
 
             if _first_log:
                 print(f"first frame: obs={obs['img_van'].shape}  mask={obs['mask_arr'].shape} (L)")
@@ -284,7 +303,9 @@ def episode_generator(
                 "observation":      pil_obs,
                 "observation_distracted": pil_dist,
                 "mask":             pil_mask,
+                "object_mask":      pil_object_mask,
                 "state":            obs["state"].tolist(),
+                "object_state":     obs["object_state"].tolist(),
                 "action":           action.tolist(),
                 "reward":           float(reward),
                 "terminated":       bool(terminated),
@@ -398,7 +419,7 @@ def main(
     # when multiple jobs run in parallel.
     # Always wipe any existing cache so stale data from previous (buggy) runs
     # can never be reused.
-    cache_dir = os.path.join('/tmp', f'hf_cache_{task}_{split}')
+    cache_dir = os.path.join("datasets", "hf_cache", f"{task}_{split}")
     shutil.rmtree(cache_dir, ignore_errors=True)
     os.makedirs(cache_dir, exist_ok=True)
 

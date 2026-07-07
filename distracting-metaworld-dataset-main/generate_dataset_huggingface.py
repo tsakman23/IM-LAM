@@ -57,7 +57,7 @@ from make_env import make_metaworld_env
 # ────────────────────────────────────────────────────────────────────────────
 
 # REPO_ID     = "EpicPinkPenguin/visual_distracting_metaworld"
-REPO_ID     = "tsakman23/visual_distracting_metaworld"
+REPO_ID     = "tsakman23/visual_masked_distracting_metaworld"
 IMG_HW      = 128
 STATE_DIM   = 39
 ACTION_DIM  = 4

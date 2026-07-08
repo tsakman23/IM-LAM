@@ -37,3 +37,5 @@ Thumbs.db
 
 # Logs
 *.log
+# Generator run artifacts (episode-return summaries)
+episode_returns_*.txt

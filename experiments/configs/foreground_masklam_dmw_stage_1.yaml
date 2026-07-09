@@ -20,12 +20,12 @@ env:
   name: Meta-World/masked-MT1-push-v3
 
 module:
-  # Weight the reconstruction loss by agent U object (the Foreground-MaskLAM change).
+  # Foreground-MaskLAM: use the agent U object union everywhere MaskLAM used the agent
+  # mask - both to gate the reconstruction loss and as the model's mask input channel.
   object_mask_loss: true
-  # Optional ablation: also feed the union as the model's mask input channel.
-  # Off by default (agent-only input, matching MaskLAM; the paper's mask-input
-  # ablation helps DCS but slightly hurts DMW).
-  object_mask_input: false
+  object_mask_input: true
+  # Ablation (isolate the mask-input channel): override net.add_mask_to_observation=false
+  # on the CLI to stop feeding any mask to the model, while keeping the union loss gate.
 
 dataset:
   # Pull observation_distracted + agent mask + object_mask from my regenerated repo.

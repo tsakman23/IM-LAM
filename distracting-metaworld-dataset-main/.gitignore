@@ -17,8 +17,9 @@ sdist/
 var/
 *.egg-info/
 
-# DAVIS dataset (large video files - don't commit)
-datasets/
+# DAVIS + local caches, and the `datasets` symlink to the shared data tree.
+# No trailing slash so it also matches the symlink, not just a real directory.
+datasets
 *.zip
 
 # Generated test datasets

@@ -69,7 +69,13 @@ def main() -> None:
                     block_size=args.block_size, dataset_path=args.repo,
                     with_object_mask=args.with_object_mask,
                 )
-                print(f"[{split}] ready: {len(ds):,} rows in {time.time() - t0:.0f}s")
+                # Report RAW transitions (len(ds.data)), not len(ds): the latter is the
+                # number of block_size-frame windows (raw - block_size + 1), which looks
+                # like missing rows but is just the frame-stacking offset.
+                raw = len(getattr(ds, "data", ds))
+                print(f"[{split}] ready: {raw:,} transitions "
+                      f"({len(ds):,} windowed samples at block_size={args.block_size}) "
+                      f"in {time.time() - t0:.0f}s")
                 break
             except KeyboardInterrupt:
                 print(f"\n[{split}] interrupted - completed shards are kept; rerun to resume.")

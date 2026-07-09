@@ -327,6 +327,8 @@ def get_metaworld_dataset(
     cache_dir: Optional[str] = None,
     block_size: Optional[int] = None,
     transform: Optional[DictTransform] = None,
+    path: Optional[str] = None,
+    with_object_mask: bool = False,
 ) -> MetaWorldDataset:
     """Get the available Meta-World dataset (handles both distracted and vanilla).
     Args:
@@ -335,6 +337,12 @@ def get_metaworld_dataset(
         cache_dir (Optional[str]): Directory to cache the dataset.
         block_size (Optional[int]): The block size for the dataset.
         transform (Optional[DictTransform]): The transformation to apply to the dataset.
+        path (Optional[str]): HuggingFace repo id to load from. Defaults to the
+            authors' ``EpicPinkPenguin/visual_distracting_metaworld`` (agent mask
+            only). Set to a repo that carries object masks (e.g.
+            ``tsakman23/visual_masked_distracting_metaworld``) for Foreground-MaskLAM.
+        with_object_mask (bool): If True, also load the ``object_mask`` column
+            (only present in the object-mask repos). Required by Foreground-MaskLAM.
     Returns:
         MetaWorldDataset: Available Meta-World dataset.
     """
@@ -359,23 +367,32 @@ def get_metaworld_dataset(
         use_sam_mask = True
         name = name.replace("sam-", "")
 
-    return MetaWorldDataset(
+    columns = ["observation", "mask", "action"]
+    if with_object_mask:
+        columns.append("object_mask")
+
+    dataset_kwargs = dict(
         name=name,  # bare HF config name, e.g. "basketball-v3"
         split=split,
         cache_dir=cache_dir,
         num_proc=8,
         block_size=block_size,
-        columns=["observation", "mask", "action"],
+        columns=columns,
         transform=transform,
         use_distracted_obs=use_distracted_obs,
         use_sam_mask=use_sam_mask,
     )
+    if path is not None:
+        dataset_kwargs["path"] = path  # else MetaWorldDataset uses its EpicPinkPenguin default
+    return MetaWorldDataset(**dataset_kwargs)
 
 def get_dataset(
     name: str,
     split: str,
     cache_dir: Optional[str] = None,
     block_size: Optional[int] = None,
+    dataset_path: Optional[str] = None,
+    with_object_mask: bool = False,
     **kwargs,
 ) -> Dataset:
     """
@@ -386,18 +403,26 @@ def get_dataset(
         split (str): The dataset split, e.g., 'train' or 'test'.
         cache_dir (Optional[str]): Directory to cache the dataset.
         block_size (Optional[int]): The block size for the dataset.
+        dataset_path (Optional[str]): Override HuggingFace repo id (Meta-World only).
+            Use an object-mask repo (e.g. tsakman23/visual_masked_distracting_metaworld)
+            together with ``with_object_mask=True`` for Foreground-MaskLAM.
+        with_object_mask (bool): If True, also load and transform the object mask
+            (Meta-World only). Required by the Foreground-MaskLAM baseline.
         **kwargs: Additional arguments for the dataset.
 
     Returns:
         Dataset: The dataset object.
     """
-    transform = get_dataset_transform(name)
+    transform = get_dataset_transform(name, with_object_mask=with_object_mask)
     if "dm_control" in name:
         if "masked" in name:
             return get_masked_distracting_control_suite_dataset(name, split, cache_dir, block_size, transform)
         else:
             return get_dmc_dataset(name, split, cache_dir, block_size, transform)
     elif "Meta-World" in name:
-        return get_metaworld_dataset(name, split, cache_dir, block_size, transform)
+        return get_metaworld_dataset(
+            name, split, cache_dir, block_size, transform,
+            path=dataset_path, with_object_mask=with_object_mask,
+        )
     else:
         raise NotImplementedError("Dataset is currently not supported for this submission.")

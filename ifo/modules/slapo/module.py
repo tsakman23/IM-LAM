@@ -135,6 +135,8 @@ class SLAPOIDMModule(SupervisedLightningModule):
         dilate_mask_radius: int = 0,
         erode_mask: bool = False,
         erode_mask_radius: int = 0,
+        object_mask_loss: bool = False,
+        object_mask_input: bool = False,
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -159,6 +161,14 @@ class SLAPOIDMModule(SupervisedLightningModule):
             dilate_mask_radius (int, optional): Radius of the dilation. Defaults to 0.
             erode_mask (bool, optional): Whether to erode the mask or not. Defaults to False.
             erode_mask_radius (int, optional): Radius of the erosion. Defaults to 0.
+            object_mask_loss (bool, optional): Foreground-MaskLAM. If True, gate the
+                reconstruction loss by the union of the agent mask and the object
+                mask (requires an ``object_mask`` in the batch). Defaults to False.
+            object_mask_input (bool, optional): If True, also feed that agent+object
+                union as the model's mask input channel (and for observation masking)
+                instead of the agent mask alone. Defaults to False (agent-only input,
+                matching MaskLAM; the paper's mask-input ablation helps DCS but
+                slightly hurts DMW).
         """
         super().__init__(net, batch_size, optimizer, lr_scheduler, num_workers, max_grad_norm, **kwargs)
         self.debug_transform = debug_transform
@@ -173,6 +183,11 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.dilate_mask_radius = dilate_mask_radius
         self.erode_mask = erode_mask
         self.erode_mask_radius = erode_mask_radius
+        # Foreground-MaskLAM: weight the reconstruction loss (and optionally the
+        # mask input channel) by the union of the agent mask and the manipulated
+        # object mask, instead of the agent mask alone.
+        self.object_mask_loss = object_mask_loss
+        self.object_mask_input = object_mask_input
 
     @torch.no_grad()
     @torch.compiler.disable()
@@ -250,14 +265,30 @@ class SLAPOIDMModule(SupervisedLightningModule):
             with torch.no_grad():
                 batch["mask"] = self.net.segmentation_net.label(batch["observation"])
 
+        # Foreground-MaskLAM: optionally fold the manipulated-object mask into the
+        # agent mask (pixel-wise union). `input_mask` feeds the model / observation
+        # masking; `loss_mask` gates the reconstruction loss. With both flags off
+        # this is identical to MaskLAM (both fall back to the agent mask).
+        agent_mask = batch.get("mask", None)
+        object_mask = batch.get("object_mask", None)
+        has_object = object_mask is not None
+        input_mask = agent_mask
+        loss_mask = agent_mask
+        if agent_mask is not None and has_object:
+            foreground_mask = (agent_mask + object_mask).clamp(0.0, 1.0)
+            if self.object_mask_input:
+                input_mask = foreground_mask
+            if self.object_mask_loss:
+                loss_mask = foreground_mask
+
         # Mask the observations if the mask is provided and enabled.
-        if self.mask_observation and "mask" in batch:
-            batch["observation"] = batch["observation"] * batch["mask"]
+        if self.mask_observation and agent_mask is not None:
+            batch["observation"] = batch["observation"] * input_mask
 
-        next_observation, action_distribution, vq_loss, perplexity = self.net(batch["observation"], batch.get("mask", None))
+        next_observation, action_distribution, vq_loss, perplexity = self.net(batch["observation"], input_mask)
 
-        if self.mask_loss and "mask" in batch:
-            mask = batch["mask"][:, self.net.frame_stack]
+        if self.mask_loss and agent_mask is not None:
+            mask = loss_mask[:, self.net.frame_stack]
             reconstruction_loss = F.mse_loss(
                 next_observation, batch["observation"][:, self.net.frame_stack], reduction="none")
             reconstruction_loss = (reconstruction_loss * mask).sum() / mask.sum()

@@ -237,27 +237,34 @@ def dcs_masked() -> DictTransform:
 
 
 
-def metaworld() -> DictTransform:
+def metaworld(with_object_mask: bool = False) -> DictTransform:
     """Apply dataset transformations for Meta-World environment.
+
+    Args:
+        with_object_mask (bool): If True, also process an ``object_mask`` column
+            with the same mask transform as ``mask`` (used by the
+            Foreground-MaskLAM baseline, which needs the manipulated-object mask).
 
     Returns:
        DictTransform: Transformations for Meta-World environment.
     """
 
-    transform = DictTransform(
-        {
-            "observation": Compose([ToDtype(torch.float32), Lambda(center)]),
-            "mask": ProcessMask(),
-            "action": Clip(min_val=-1, max_val=1),
-        }
-    )
-    return transform
+    transforms = {
+        "observation": Compose([ToDtype(torch.float32), Lambda(center)]),
+        "mask": ProcessMask(),
+        "action": Clip(min_val=-1, max_val=1),
+    }
+    if with_object_mask:
+        transforms["object_mask"] = ProcessMask()
+    return DictTransform(transforms)
 
-def get_dataset_transform(dataset_name: Optional[str]) -> DictTransform:
+def get_dataset_transform(dataset_name: Optional[str], with_object_mask: bool = False) -> DictTransform:
     """Get dataset transformations for the specified dataset.
 
     Args:
         dataset_name (str): Name of the dataset.
+        with_object_mask (bool): If True, Meta-World transforms also process an
+            ``object_mask`` column (Foreground-MaskLAM). Ignored for other datasets.
 
     Returns:
         DictTransform: Transformations for the specified dataset.
@@ -276,6 +283,6 @@ def get_dataset_transform(dataset_name: Optional[str]) -> DictTransform:
         else:
             return dm_control()
     elif "Meta-World" in dataset_name:
-        return metaworld()
+        return metaworld(with_object_mask=with_object_mask)
     else:
         raise NotImplementedError("Dataset is currently not supported.")

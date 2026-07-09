@@ -1,0 +1,33 @@
+# Foreground-MaskLAM (baseline) - Stage 1.
+#
+# Identical to MaskLAM stage 1 (slapo_dmw_stage_1) except the FDM reconstruction
+# loss is gated by the UNION of the agent mask and the manipulated-object mask
+# (object_mask_loss=true), instead of the agent mask alone. This isolates the
+# effect of masking object pixels in the loss, separate from the directed
+# embodiment->object FDM of IM-LAM.
+#
+# Requires object masks, which live only in the regenerated object-mask repo
+# (tsakman23/visual_masked_distracting_metaworld) - the MaskLAM authors' release is
+# agent-mask only. Only tasks I have regenerated are available.
+#
+# Stages 2 and 3 are unchanged (use slapo_dmw_stage_2 / slapo_dmw_stage_3) - the
+# loss-masking change is confined to the Stage-1 latent action model.
+defaults:
+  - slapo_dmw_stage_1
+  - _self_
+
+env:
+  name: Meta-World/masked-MT1-push-v3
+
+module:
+  # Weight the reconstruction loss by agent U object (the Foreground-MaskLAM change).
+  object_mask_loss: true
+  # Optional ablation: also feed the union as the model's mask input channel.
+  # Off by default (agent-only input, matching MaskLAM; the paper's mask-input
+  # ablation helps DCS but slightly hurts DMW).
+  object_mask_input: false
+
+dataset:
+  # Pull observation_distracted + agent mask + object_mask from my regenerated repo.
+  with_object_mask: true
+  dataset_path: tsakman23/visual_masked_distracting_metaworld

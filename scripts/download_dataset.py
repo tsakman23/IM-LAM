@@ -28,8 +28,6 @@ import argparse
 import os
 import time
 
-os.environ.setdefault("HF_HOME", "/data2/masklam/datasets/hf_home")
-
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

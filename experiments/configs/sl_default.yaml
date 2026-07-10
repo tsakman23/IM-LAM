@@ -36,5 +36,8 @@ env:
 dataset:
   _target_: ifo.common.utils.data.get_dataset
   name: ${env.name}
-  cache_dir: /tmp/datasets
+  # Persist the built dataset next to the run's data (matches scripts/download_dataset.py's
+  # default and the documented run commands) so a pre-downloaded cache is reused without a
+  # CLI override. Was /tmp/datasets (ephemeral, off the shared /data2 disk).
+  cache_dir: ./datasets/slapo/${env.name}
   block_size: 1

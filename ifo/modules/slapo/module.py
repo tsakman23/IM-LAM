@@ -271,6 +271,16 @@ class SLAPOIDMModule(SupervisedLightningModule):
         # this is identical to MaskLAM (both fall back to the agent mask).
         agent_mask = batch.get("mask", None)
         object_mask = batch.get("object_mask", None)
+        # Fail fast: a Foreground-MaskLAM flag enabled without object masks in the batch
+        # would otherwise silently fall back to agent-only masks and train plain MaskLAM
+        # under a Foreground-MaskLAM config, corrupting the ablation.
+        if (self.object_mask_loss or self.object_mask_input) and object_mask is None:
+            raise ValueError(
+                "object_mask_loss/object_mask_input is enabled but the batch has no 'object_mask'. "
+                "Load object masks with dataset.with_object_mask=true and an object-mask repo "
+                "(e.g. dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld), or "
+                "disable the object-mask flags to run plain MaskLAM."
+            )
         has_object = object_mask is not None
         input_mask = agent_mask
         loss_mask = agent_mask

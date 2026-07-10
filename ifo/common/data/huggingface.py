@@ -1,10 +1,11 @@
+import os
 from typing import List, Optional
 
 import torch
 from tensordict import TensorDict
 from torch.utils.data import Dataset
 
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from ifo.common.transforms.data import DictTransform
 
 
@@ -42,7 +43,19 @@ class HuggingFaceDataset(Dataset):
         self.block_size = block_size if block_size else 0
         self.transform = transform
         self.columns = columns
-        self.data = load_dataset(path=path, name=name, cache_dir=cache_dir, split=split, num_proc=num_proc, **kwargs)
+        # Local (save_to_disk) datasets: when `path` is a directory on disk, load it with
+        # `load_from_disk` instead of pulling from the HF Hub. This lets the generator produce a
+        # loadable copy locally (layout <root>/<config>/<split>) and training read it directly,
+        # skipping the generate -> push -> download round-trip. A repo id (not a local dir) still
+        # routes to `load_dataset` unchanged, so existing configs are unaffected.
+        if isinstance(path, str) and os.path.isdir(path):
+            local_path = path
+            for part in (name, split):
+                if part and os.path.isdir(os.path.join(local_path, part)):
+                    local_path = os.path.join(local_path, part)
+            self.data = load_from_disk(local_path)
+        else:
+            self.data = load_dataset(path=path, name=name, cache_dir=cache_dir, split=split, num_proc=num_proc, **kwargs)
         self.data = self.data.with_format("torch", columns=columns)
 
     def __len__(self) -> int:

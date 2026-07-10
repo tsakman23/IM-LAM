@@ -50,6 +50,7 @@ from tqdm.auto import tqdm
 
 from datasets import Dataset, Features, Sequence, Value
 from datasets import Image as HFImage
+from local_save import save_dataset_locally
 from make_env import make_metaworld_env
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -368,6 +369,7 @@ def main(
     camera_name: str,
     background_dataset_path: str,
     push_to_hub: bool,
+    save_local: Optional[str],
     dry_run: bool,
     cache_dir: str,
     max_shard_size: str,
@@ -440,7 +442,12 @@ def main(
     )
     console.print(f"      ✓ {len(dataset):,} frames collected")
 
-    # ── upload ───────────────────────────────────────────────────────────────
+    # ── persist ────────────────────────────────────────────────────────────
+    # Data is "safely persisted" if it was pushed to the Hub and/or saved locally; either
+    # lets us drop the from_generator scratch cache. --save_local writes a training-loadable
+    # copy so the run can read it directly (dataset.dataset_path=<DIR>), skipping the
+    # push->download round-trip. The two flags are independent and combinable.
+    persisted = False
     if push_to_hub:
         console.print(
             f"\n[3/3] Uploading  repo={REPO_ID}  "
@@ -456,13 +463,23 @@ def main(
             f"\n[bold green]✓✓✓ Done![/bold green]  "
             f"https://huggingface.co/datasets/{REPO_ID}"
         )
-        # Delete cache now that upload succeeded
+        persisted = True
+    if save_local:
+        local_path = save_dataset_locally(dataset, save_local, task, split)
+        console.print(
+            f"\n[bold green]✓ Saved locally:[/bold green] {local_path}  "
+            f"(train with dataset.dataset_path={save_local})"
+        )
+        persisted = True
+
+    if persisted:
+        # Data is safe on the Hub and/or on local disk – drop the redundant scratch cache.
         shutil.rmtree(cache_dir, ignore_errors=True)
         console.print(f"[dim]Cache deleted: {cache_dir}[/dim]")
     else:
         console.print(
-            f"\n[yellow]--push_to_hub not set – "
-            f"dataset cached locally in {cache_dir}[/yellow]"
+            f"\n[yellow]--push_to_hub / --save_local not set – "
+            f"dataset kept only in the scratch cache at {cache_dir}[/yellow]"
         )
 
 
@@ -495,6 +512,11 @@ if __name__ == "__main__":
                         help="Max parquet shard size (e.g. 500MB, 2GB)")
     parser.add_argument("--push_to_hub", action="store_true",
                         help=f"Upload to {REPO_ID}")
+    parser.add_argument("--save_local", nargs="?", const="datasets/slapo_local", default=None, metavar="DIR",
+                        help="Also save a training-loadable copy locally to <DIR>/<task>/<split> "
+                             "via save_to_disk (default DIR: datasets/slapo_local). Skips the "
+                             "push->download round-trip; combinable with --push_to_hub. Point the "
+                             "run's dataset.dataset_path at <DIR> to train on it.")
     parser.add_argument("--private", action="store_true",
                         help="Make the HuggingFace repo private")
     parser.add_argument("--dry_run", action="store_true",
@@ -515,6 +537,7 @@ if __name__ == "__main__":
         camera_name=args.camera,
         background_dataset_path=args.background_dataset_path,
         push_to_hub=args.push_to_hub,
+        save_local=args.save_local,
         dry_run=args.dry_run,
         cache_dir=args.cache_dir,
         max_shard_size=args.max_shard_size,

@@ -6,4 +6,4 @@ module:
   batch_size: 128
 
 env:
-  name: Meta-World/masked-MT1-button-press-v3
+  name: Meta-World/masked-MT1-push-v3

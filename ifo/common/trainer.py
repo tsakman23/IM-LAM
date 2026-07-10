@@ -438,6 +438,16 @@ class SupervisedTrainer(LightningTrainer):
                     val_dataset,
                 )
 
+        # End-of-stage checkpoint. Validation (and therefore save_best) only fires on
+        # validation-frequency boundaries during the loop, and the final steps of a run
+        # essentially never land on one (epoch-budget runs end mid-interval; step-budget
+        # runs skip the final boundary via increment-then-break), so the final - and often
+        # best - model would otherwise never be evaluated or saved. Run one final
+        # validation + save_best so the last model gets a fair chance to be kept.
+        if val_loader is not None:
+            self.val_loop(model, val_loader)
+        self.save_best(state, val_dataset is not None)
+
         # Advance the pipeline's cumulative W&B step so the next in-process stage continues
         # monotonically on the trainer/global_step axis (single-run pipeline). No-op otherwise.
         if self.log_prefix is not None:

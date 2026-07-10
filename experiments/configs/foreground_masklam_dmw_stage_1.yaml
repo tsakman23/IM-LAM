@@ -20,12 +20,13 @@ env:
   name: Meta-World/masked-MT1-push-v3
 
 module:
-  # Foreground-MaskLAM: use the agent U object union everywhere MaskLAM used the agent
-  # mask - both to gate the reconstruction loss and as the model's mask input channel.
+  # Foreground-MaskLAM: gate the FDM reconstruction loss by the agent U object union so the
+  # decoder must reconstruct the manipulated object too. The encoder/IDM mask INPUT stays
+  # agent-only (object_mask_input=false): the latent action z_t must remain an embodiment
+  # action (proposal S5.4), and the frozen encoder is reused in stages 2/3 which feed it the
+  # agent mask - feeding the union here would both contaminate z_t and desync stages 2/3.
   object_mask_loss: true
-  object_mask_input: true
-  # Ablation (isolate the mask-input channel): override net.add_mask_to_observation=false
-  # on the CLI to stop feeding any mask to the model, while keeping the union loss gate.
+  object_mask_input: false
 
 dataset:
   # Pull observation_distracted + agent mask + object_mask from my regenerated repo.

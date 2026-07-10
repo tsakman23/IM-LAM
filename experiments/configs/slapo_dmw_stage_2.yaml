@@ -8,6 +8,12 @@ trainer:
 env:
   name: Meta-World/masked-MT1-push-v3
 
+dataset:
+  # Agent-mask-only release; stages 2/3 (latent policy / BC decoder) never read object masks.
+  # Foreground-MaskLAM reuses this config unchanged, so it also trains stages 2/3 on this release.
+  dataset_path: EpicPinkPenguin/visual_distracting_metaworld
+  with_object_mask: false
+
 module:
   batch_size: 128
   optimizer:

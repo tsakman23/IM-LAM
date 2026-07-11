@@ -90,7 +90,7 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   env.name=Meta-World/masked-MT1-<task> \
   logger.mode=online \
   logger.group=masklam_reprod \
-  logger.notes="MaskLAM <task>" \
+  logger.notes="MaskLAM <task> seed 1" \
   trainer.compile=True \
   fabric.precision=bf16-mixed \
   trainer.random_seed=1 \

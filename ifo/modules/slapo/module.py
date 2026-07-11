@@ -214,6 +214,47 @@ class SLAPOIDMModule(SupervisedLightningModule):
         )
 
     @torch.no_grad()
+    @torch.compiler.disable()
+    def _log_debug_union_mask(
+        self, union_mask: Tensor, agent_mask: Tensor, next_observation: Tensor, log_prefix: str
+    ) -> None:
+        """Foreground-MaskLAM: log the agent U object union mask actually used.
+
+        Only called on Foreground-MaskLAM runs (``object_mask_loss`` or ``object_mask_input``);
+        stock MaskLAM logging is untouched. Two panels are emitted under ``{prefix}``:
+
+        - ``union_mask``: the union (top) vs the agent-only mask (bottom) as a white-on-black
+          comp grid, so the manipulated-object pixels the union adds are directly visible.
+        - ``union_mask_overlay``: the union tinted green over the (un-centered) ground-truth
+          next observation, so the union can be read against the scene it gates.
+
+        Args:
+            union_mask (Tensor): Union mask of shape (B, 1, H, W) in {0, 1}.
+            agent_mask (Tensor): Agent-only mask of shape (B, 1, H, W) in {0, 1}.
+            next_observation (Tensor): Centered GT next observation of shape (B, C, H, W).
+            log_prefix (str): Prefix for logging.
+        """
+        assert self.debug_transform is not None, "Debug transform is not provided"
+        gt_next_obs = self.debug_transform(next_observation)  # (B, C, H, W) in [0, 255]
+        # Green tint on the union region, blended over the observation.
+        alpha = 0.5
+        green = torch.zeros_like(gt_next_obs)
+        green[:, 1] = 255.0
+        overlay = gt_next_obs * (1.0 - alpha * union_mask) + green * (alpha * union_mask)
+        self.logger.experiment.log(
+            {
+                f"{log_prefix}/union_mask": wandb.Image(
+                    make_comp_grid(union_mask * 255.0, agent_mask * 255.0),
+                    caption="Union (agent U object) mask vs agent-only mask",
+                ),
+                f"{log_prefix}/union_mask_overlay": wandb.Image(
+                    make_comp_grid(overlay, gt_next_obs),
+                    caption="Union mask (green) over next obs vs next obs",
+                ),
+            },
+        )
+
+    @torch.no_grad()
     def compute_miou(self, pred_masks: Tensor, gt_masks: Tensor, threshold: float = 0.5) -> Tensor:
         """
         Compute mean intersection over union (mIoU).
@@ -284,6 +325,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         has_object = object_mask is not None
         input_mask = agent_mask
         loss_mask = agent_mask
+        foreground_mask = None
         if agent_mask is not None and has_object:
             foreground_mask = (agent_mask + object_mask).clamp(0.0, 1.0)
             if self.object_mask_input:
@@ -333,6 +375,15 @@ class SLAPOIDMModule(SupervisedLightningModule):
             self._log_debug_images(next_observation, batch["observation"][:, self.net.frame_stack], prefix)
             if self.dilate_mask or self.erode_mask:
                 self._log_debug_masks(batch["mask"][:, self.net.frame_stack], original_mask[:, self.net.frame_stack], prefix)
+            # Foreground-MaskLAM: additionally log the agent U object union actually used
+            # to gate the FDM loss / mask input. Guarded so stock MaskLAM logging is untouched.
+            if (self.object_mask_loss or self.object_mask_input) and foreground_mask is not None:
+                self._log_debug_union_mask(
+                    foreground_mask[:, self.net.frame_stack],
+                    agent_mask[:, self.net.frame_stack],
+                    batch["observation"][:, self.net.frame_stack],
+                    prefix,
+                )
 
         return step_dict
 

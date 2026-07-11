@@ -22,6 +22,7 @@ dependencies = [
     "tensordict==0.10.0",       # Newer versions show warnings related to deepcopy with fabric
     "torchmetrics==1.8.0",
     "opencv_python==4.11.0.86",
+    "matplotlib==3.10.9",       # Report-ready reconstruction-comparison panels (compare_reconstruction.py)
     "av==14.2.0",
     "coolname==2.2.0",
     "rich==14.0.0",

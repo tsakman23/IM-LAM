@@ -135,6 +135,8 @@ class SLAPOIDMModule(SupervisedLightningModule):
         dilate_mask_radius: int = 0,
         erode_mask: bool = False,
         erode_mask_radius: int = 0,
+        object_mask_loss: bool = False,
+        object_mask_input: bool = False,
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -159,6 +161,14 @@ class SLAPOIDMModule(SupervisedLightningModule):
             dilate_mask_radius (int, optional): Radius of the dilation. Defaults to 0.
             erode_mask (bool, optional): Whether to erode the mask or not. Defaults to False.
             erode_mask_radius (int, optional): Radius of the erosion. Defaults to 0.
+            object_mask_loss (bool, optional): Foreground-MaskLAM. If True, gate the
+                reconstruction loss by the union of the agent mask and the object
+                mask (requires an ``object_mask`` in the batch). Defaults to False.
+            object_mask_input (bool, optional): If True, also feed that agent+object
+                union as the model's mask input channel (and for observation masking)
+                instead of the agent mask alone. Defaults to False (agent-only input,
+                matching MaskLAM; the paper's mask-input ablation helps DCS but
+                slightly hurts DMW).
         """
         super().__init__(net, batch_size, optimizer, lr_scheduler, num_workers, max_grad_norm, **kwargs)
         self.debug_transform = debug_transform
@@ -173,6 +183,11 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.dilate_mask_radius = dilate_mask_radius
         self.erode_mask = erode_mask
         self.erode_mask_radius = erode_mask_radius
+        # Foreground-MaskLAM: weight the reconstruction loss (and optionally the
+        # mask input channel) by the union of the agent mask and the manipulated
+        # object mask, instead of the agent mask alone.
+        self.object_mask_loss = object_mask_loss
+        self.object_mask_input = object_mask_input
 
     @torch.no_grad()
     @torch.compiler.disable()
@@ -195,6 +210,47 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.logger.experiment.log(
             {
                 f"{log_prefix}/mask": wandb.Image(make_comp_grid(mask * 255.0, gt_mask * 255.0), caption="Modified mask vs ground truth"),
+            },
+        )
+
+    @torch.no_grad()
+    @torch.compiler.disable()
+    def _log_debug_union_mask(
+        self, union_mask: Tensor, agent_mask: Tensor, next_observation: Tensor, log_prefix: str
+    ) -> None:
+        """Foreground-MaskLAM: log the agent U object union mask actually used.
+
+        Only called on Foreground-MaskLAM runs (``object_mask_loss`` or ``object_mask_input``);
+        stock MaskLAM logging is untouched. Two panels are emitted under ``{prefix}``:
+
+        - ``union_mask``: the union (top) vs the agent-only mask (bottom) as a white-on-black
+          comp grid, so the manipulated-object pixels the union adds are directly visible.
+        - ``union_mask_overlay``: the union tinted green over the (un-centered) ground-truth
+          next observation, so the union can be read against the scene it gates.
+
+        Args:
+            union_mask (Tensor): Union mask of shape (B, 1, H, W) in {0, 1}.
+            agent_mask (Tensor): Agent-only mask of shape (B, 1, H, W) in {0, 1}.
+            next_observation (Tensor): Centered GT next observation of shape (B, C, H, W).
+            log_prefix (str): Prefix for logging.
+        """
+        assert self.debug_transform is not None, "Debug transform is not provided"
+        gt_next_obs = self.debug_transform(next_observation)  # (B, C, H, W) in [0, 255]
+        # Green tint on the union region, blended over the observation.
+        alpha = 0.5
+        green = torch.zeros_like(gt_next_obs)
+        green[:, 1] = 255.0
+        overlay = gt_next_obs * (1.0 - alpha * union_mask) + green * (alpha * union_mask)
+        self.logger.experiment.log(
+            {
+                f"{log_prefix}/union_mask": wandb.Image(
+                    make_comp_grid(union_mask * 255.0, agent_mask * 255.0),
+                    caption="Union (agent U object) mask vs agent-only mask",
+                ),
+                f"{log_prefix}/union_mask_overlay": wandb.Image(
+                    make_comp_grid(overlay, gt_next_obs),
+                    caption="Union mask (green) over next obs vs next obs",
+                ),
             },
         )
 
@@ -250,14 +306,41 @@ class SLAPOIDMModule(SupervisedLightningModule):
             with torch.no_grad():
                 batch["mask"] = self.net.segmentation_net.label(batch["observation"])
 
+        # Foreground-MaskLAM: optionally fold the manipulated-object mask into the
+        # agent mask (pixel-wise union). `input_mask` feeds the model / observation
+        # masking; `loss_mask` gates the reconstruction loss. With both flags off
+        # this is identical to MaskLAM (both fall back to the agent mask).
+        agent_mask = batch.get("mask", None)
+        object_mask = batch.get("object_mask", None)
+        # Fail fast: a Foreground-MaskLAM flag enabled without object masks in the batch
+        # would otherwise silently fall back to agent-only masks and train plain MaskLAM
+        # under a Foreground-MaskLAM config, corrupting the ablation.
+        if (self.object_mask_loss or self.object_mask_input) and object_mask is None:
+            raise ValueError(
+                "object_mask_loss/object_mask_input is enabled but the batch has no 'object_mask'. "
+                "Load object masks with dataset.with_object_mask=true and an object-mask repo "
+                "(e.g. dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld), or "
+                "disable the object-mask flags to run plain MaskLAM."
+            )
+        has_object = object_mask is not None
+        input_mask = agent_mask
+        loss_mask = agent_mask
+        foreground_mask = None
+        if agent_mask is not None and has_object:
+            foreground_mask = (agent_mask + object_mask).clamp(0.0, 1.0)
+            if self.object_mask_input:
+                input_mask = foreground_mask
+            if self.object_mask_loss:
+                loss_mask = foreground_mask
+
         # Mask the observations if the mask is provided and enabled.
-        if self.mask_observation and "mask" in batch:
-            batch["observation"] = batch["observation"] * batch["mask"]
+        if self.mask_observation and agent_mask is not None:
+            batch["observation"] = batch["observation"] * input_mask
 
-        next_observation, action_distribution, vq_loss, perplexity = self.net(batch["observation"], batch.get("mask", None))
+        next_observation, action_distribution, vq_loss, perplexity = self.net(batch["observation"], input_mask)
 
-        if self.mask_loss and "mask" in batch:
-            mask = batch["mask"][:, self.net.frame_stack]
+        if self.mask_loss and agent_mask is not None:
+            mask = loss_mask[:, self.net.frame_stack]
             reconstruction_loss = F.mse_loss(
                 next_observation, batch["observation"][:, self.net.frame_stack], reduction="none")
             reconstruction_loss = (reconstruction_loss * mask).sum() / mask.sum()
@@ -292,6 +375,15 @@ class SLAPOIDMModule(SupervisedLightningModule):
             self._log_debug_images(next_observation, batch["observation"][:, self.net.frame_stack], prefix)
             if self.dilate_mask or self.erode_mask:
                 self._log_debug_masks(batch["mask"][:, self.net.frame_stack], original_mask[:, self.net.frame_stack], prefix)
+            # Foreground-MaskLAM: additionally log the agent U object union actually used
+            # to gate the FDM loss / mask input. Guarded so stock MaskLAM logging is untouched.
+            if (self.object_mask_loss or self.object_mask_input) and foreground_mask is not None:
+                self._log_debug_union_mask(
+                    foreground_mask[:, self.net.frame_stack],
+                    agent_mask[:, self.net.frame_stack],
+                    batch["observation"][:, self.net.frame_stack],
+                    prefix,
+                )
 
         return step_dict
 

@@ -1,0 +1,15 @@
+
+   frame |    obj MSE MaskLAM obj MSE FG-MaskLAM |    agent MSE MaskLAM agent MSE FG-MaskLAM
+--------------------------------------------------------------------------------------------
+   76230 |            0.01807            0.00176 |              0.00003              0.00005
+   89562 |            0.02664            0.00180 |              0.00006              0.00004
+   88638 |            0.01614            0.00048 |              0.00022              0.00019
+   50754 |            0.03273            0.00114 |              0.00012              0.00013
+   68244 |            0.01180            0.00246 |              0.00025              0.00030
+   85932 |            0.01206            0.00247 |              0.00025              0.00029
+
+[compare] object-region mean MSE: MaskLAM=0.01957  FG-MaskLAM=0.00169
+[compare] agent-region mean MSE (control): MaskLAM=0.00016  FG-MaskLAM=0.00017
+[compare] wrote 6 panels to docs/figures/fg_vs_masklam/
+
+Report 50754 as figure.

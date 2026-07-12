@@ -6,7 +6,15 @@ trainer:
   max_epochs: 4
 
 env:
-  name: Meta-World/masked-MT1-button-press-v3
+  name: Meta-World/masked-MT1-push-v3
+
+dataset:
+  # MaskLAM baseline: pin the authors' agent-mask-only release explicitly (rather than relying on
+  # MetaWorldDataset's built-in default) so the dataset choice lives in config, not on the CLI.
+  # Foreground-MaskLAM inherits this file and overrides both keys in
+  # foreground_masklam_dmw_stage_1 to point at the object-mask repo.
+  dataset_path: EpicPinkPenguin/visual_distracting_metaworld
+  with_object_mask: false
 
 module:
   batch_size: 128

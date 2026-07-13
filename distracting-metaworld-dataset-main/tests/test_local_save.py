@@ -27,3 +27,13 @@ def test_save_dataset_locally_writes_reloadable_layout(tmp_path):
     assert len(reloaded) == 3
     assert reloaded[0]["observation"] == 1
     assert reloaded[2]["action"] == [2.0]
+
+
+def test_save_dataset_locally_overwrites_previous_copy(tmp_path):
+    root = str(tmp_path / "slapo_local")
+    save_dataset_locally(Dataset.from_dict({"observation": [1, 2, 3]}), root, "push-v3", "train")
+    # A fresh regeneration with different content must replace, not merge/duplicate.
+    path = save_dataset_locally(Dataset.from_dict({"observation": [9, 9]}), root, "push-v3", "train")
+    reloaded = load_from_disk(path)
+    assert len(reloaded) == 2
+    assert reloaded[0]["observation"] == 9

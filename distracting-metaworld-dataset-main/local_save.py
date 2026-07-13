@@ -7,6 +7,7 @@ reads it via `load_from_disk` when `dataset.dataset_path` points at <root>, skip
 generate -> push-to-HF -> download-back round-trip.
 """
 import os
+import shutil
 
 from datasets import Dataset
 
@@ -17,7 +18,13 @@ def local_save_path(root: str, task: str, split: str) -> str:
 
 
 def save_dataset_locally(dataset: Dataset, root: str, task: str, split: str) -> str:
-    """Save ``dataset`` to <root>/<task>/<split> via ``save_to_disk`` and return that path."""
+    """Save ``dataset`` to <root>/<task>/<split> via ``save_to_disk`` and return that path.
+
+    A regeneration produces fresh data, so an existing copy at that path is replaced (not
+    duplicated) - this keeps re-runs from leaving stale/partial copies behind.
+    """
     path = local_save_path(root, task, split)
+    if os.path.isdir(path):
+        shutil.rmtree(path)
     dataset.save_to_disk(path)
     return path

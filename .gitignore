@@ -22,4 +22,4 @@ conda_env/
 .DS_Store
 .claude/
 
-**/*.pdf
+*.pdf

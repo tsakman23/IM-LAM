@@ -1,46 +1,36 @@
 # Experiment commands
 
-Reference for the commands used in this project, grouped by purpose. Replace
-`<task>` with a task slug, e.g. `push-v3`, `push-wall-v3`, `plate-slide-v3`,
-`door-open-v3`, `faucet-open-v3`, `handle-pull-v3`, `dial-turn-v3`,
-`pick-place-v3`, `peg-insert-side-v3`, `sweep-into-v3`.
+End-to-end reference in the actual order to run things:
+**generate (only for a new task) -> stage -> run -> visualize.**
+
+Replace `<task>` with a task slug, e.g. `push-v3`, `push-wall-v3`, `plate-slide-v3`,
+`door-open-v3`, `faucet-open-v3`, `handle-pull-v3`, `dial-turn-v3`, `pick-place-v3`,
+`peg-insert-side-v3`, `sweep-into-v3`.
+
+Two datasets are involved:
+- **`EpicPinkPenguin/visual_distracting_metaworld`** - the MaskLAM authors' release (agent mask only). Used by **MaskLAM**.
+- **`tsakman23/visual_masked_distracting_metaworld`** - my regenerated data (adds `object_mask` + `object_state`). Used by **Foreground-MaskLAM** and **IM-LAM**.
+
+---
 
 ## 0. Environment (prerequisites for everything below)
 
-- Interpreter: Activate the conda env with `conda activate ./conda_env`.
+- Activate the conda env: `conda activate ./conda_env`.
 - Always export:
   ```bash
   export MUJOCO_GL=egl                              # headless EGL rendering
-  export HF_HOME=<YOUR CWD>/datasets/hf_home    # keep HF caches off home dir
+  export HF_HOME=/data2/masklam/datasets/hf_home    # keep HF caches off the home dir (quota)
   ```
-- HuggingFace auth: add **write** token in `~/.bashrc` (`HF_TOKEN`). Confirm with
-  `HF_HOME=<YOUR CWD>/datasets/hf_home hf auth whoami` -> should print your username.
-- Two repos are involved:
-  - **`EpicPinkPenguin/visual_distracting_metaworld`** - the MaskLAM authors' release (agent mask only).
-  - **`tsakman23/visual_masked_distracting_metaworld`** - my regenerated data (adds `object_mask` + `object_state`).
+- HuggingFace auth (needed to push, and to pull data): add a **write** token as `HF_TOKEN` in
+  `~/.bashrc`. Confirm with `hf auth whoami` -> should print your username.
 
 ---
 
-## 1. Download a task dataset from MaskLAM's HF repo (authors' release)
+## 1. Data generation (your own object-mask data) - only for a NEW task
 
-Pre-fetch + build into the local cache so training just cache-hits (standalone, also
-avoids the train-time build deadlock). Safe to Ctrl+C and rerun (resumes).
-
-```bash
-python scripts/download_dataset.py \
-  --env Meta-World/masked-MT1-<task>
-```
-Both splits are fetched by default. `--cache-dir` defaults to `./datasets/slapo/<env>` and
-**must match** the run's `dataset.cache_dir`.
-
----
-
-## 2. Generate + push an object-mask dataset to my repo
-
-Object masks are ground-truth simulator masks emitted *by the generator itself* (columns
-`object_mask` + `object_state`) - there is no separate "generate masks" step, and SAM is not
-currently supported as an alternative to ground-truth (GT) simulator masks. Run from the generator repo. `--push_to_hub` uploads to
-`tsakman23/visual_masked_distracting_metaworld` (config = task slug).
+Skip this if the task is already on `tsakman23/...`. Object masks are ground-truth simulator masks emitted *by the
+generator itself* (`object_mask` + `object_state`) - there is no separate mask step, and SAM is not
+supported (yet). `--push_to_hub` uploads to `tsakman23/...` (config = task slug).
 
 ```bash
 cd distracting-metaworld-dataset-main
@@ -51,114 +41,149 @@ python generate_dataset_huggingface.py \
 python generate_dataset_huggingface.py \
   --env Meta-World/MT1-<task> --split test --num_steps 100000 --seed 100000 --push_to_hub
 ```
-- ~5 h per 1M-step split. Drop `--push_to_hub` to stay local; the cache is kept at
+- ~5 h per 1M-step split. Without `--push_to_hub` the data stays only in the scratch cache
   `datasets/hf_cache/<task>_<split>`.
+- `--save_local [DIR]` also writes a training-loadable `save_to_disk` copy while generating
+  (combinable with `--push_to_hub`). The generator runs from a subdir, so pass an **absolute** DIR,
+  e.g. `--save_local /data2/masklam/datasets/slapo_local` - then you can skip Section 2 for this task.
 - Articulated objects (door/faucet/handle/dial): if the object mask looks wrong, add the task to
-  `TASK_OBJECT_OVERRIDES` in `generate_dataset_huggingface.py`; `push`/`door-open` work with the
-  default heuristic.
+  `TASK_OBJECT_OVERRIDES` in `generate_dataset_huggingface.py`; `push`/`door-open` use the default heuristic.
 
-### 2a. Re-push from cache if a `--push_to_hub` upload failed (e.g. auth) - no regeneration
+**Re-push from cache** if a `--push_to_hub` upload failed (e.g. auth) - no regeneration:
 ```bash
 cd distracting-metaworld-dataset-main
-python verify/repush_from_cache.py --config <task> --split train
-# ...and --split test
+python verify/repush_from_cache.py --config <task> --split train   # ...and --split test
 ```
 
 ---
 
-## 3. Verify a generated / downloaded dataset
+## 2. Data staging (make a fast, training-ready local copy) - DO THIS BEFORE EACH RUN
+
+Training reads the dataset every step. On `/data2` (a single spinning disk) several concurrent runs
+saturate it and stall (see Section 6). So stage a `save_to_disk` copy to **RAM (`/tmp`)** once; then
+training reads it via `load_from_disk` - **no build, no fingerprint stubs, RAM-speed reads.** The
+command downloads from HF and/or reuses the built cache automatically, and is **idempotent** (skips a
+split already present). Run it from the repo root.
+
+```bash
+# MaskLAM data (authors' release):
+python scripts/save_local_dataset.py \
+  --repo EpicPinkPenguin/visual_distracting_metaworld --task <task> \
+  --splits test train --out-root /tmp/slapo_local
+
+# Foreground-MaskLAM data (object masks):
+python scripts/save_local_dataset.py \
+  --repo tsakman23/visual_masked_distracting_metaworld --task <task> \
+  --splits test train --out-root /tmp/slapo_local
+```
+Every run then adds `dataset.dataset_path=/tmp/slapo_local` (Section 5). Both dataset types stage the
+same way - only `--repo` differs.
+
+- Stage only the tasks you're about to run; `rm -rf /tmp/slapo_local/<task>` before the next batch.
+  **`/tmp` is wiped on reboot** - re-run this step afterwards (fast, reuses the on-disk build).
+- Run this **serially per task** (not many at once). Seeds of the same task share one copy.
+- **Persistent alternative:** `--out-root ./datasets/slapo_local` (on `/data2`, survives reboots).
+  Reads are then disk-bound, so start ~2 runs at a time to let the page cache warm (Section 6).
+- **One-shot acquire + stage:** `python scripts/download_dataset.py --env Meta-World/masked-MT1-<task>
+  [--repo tsakman23/... --with-object-mask] --save-local /tmp/slapo_local` does fetch + local copy in
+  one call. Plain `download_dataset.py` (no `--save-local`) instead pre-builds the persistent
+  `./datasets/slapo/<env>` HF cache used by the repo-id load path.
+
+---
+
+## 3. Verify a dataset (optional)
 
 ```bash
 cd distracting-metaworld-dataset-main
-# IID vs the authors' release (8 shared columns)
-# generates a fresh sample or streams --ours-repo
-# Checks first 3k rows of the split (train/test) for equality. If you want to check the full dataset, increase `--n`.
+# IID vs the authors' release (checks first 3k rows; raise --n for more)
 python verify/iid_check.py --config <task> --split train --n 3000
-
-# Visual mask panels (observation | agent mask | object mask | overlay) for eyeballing
+# Visual mask panels (observation | agent mask | object mask | overlay)
 python verify/render_mask_panels.py \
   --env Meta-World/MT1-<task> --steps 150 --num_frames 8 --out datasets/verify/mask_panels/<task>
 ```
 
 ---
 
-## 4. Run MaskLAM (baseline) on the authors' dataset - full 3-stage pipeline
+## 4. (context) How the run reads the dataset
 
+The full pipeline runs Stage 1 (IDM/FDM) -> Stage 2 (latent policy) -> Stage 3 (BC) + rollout eval in
+one process / one W&B run. Two load modes:
+
+- **Local (recommended, `dataset.dataset_path=<DIR>`):** `load_from_disk` on the Section-2 copy at
+  `<DIR>/<task>/<split>` - no build, no fingerprint stubs; `cache_dir` is ignored.
+- **Repo-id (default, no override):** `load_dataset` from HF, building a parquet->Arrow cache in
+  `dataset.cache_dir` (defaults to `./datasets/slapo/${env.name}`). First run builds; later runs
+  cache-hit. Prone to the disk jam if several runs build/read at once (Section 6).
+
+---
+
+## 5. Run experiments
+
+Both commands are identical except the Stage-1 config and `--repo` you staged in Section 2.
+
+### 5a. MaskLAM (baseline)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
-  run_id=masklam_<task>_seed1 \
-  env.name=Meta-World/masked-MT1-<task> \
-  logger.mode=online \
-  logger.group=masklam_reprod \
-  logger.notes="MaskLAM <task> seed 1" \
-  trainer.compile=True \
-  fabric.precision=bf16-mixed \
-  trainer.random_seed=1 \
+  run_id=masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=masklam_reprod logger.notes="MaskLAM <task> seed 1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
   --stage stage_1 -cn slapo_dmw_stage_1 \
   --stage stage_2 -cn slapo_dmw_stage_2 \
   --stage stage_3 -cn slapo_dmw_stage_3
 ```
+- Uses the authors' `EpicPinkPenguin` release (agent mask only), pinned in `slapo_dmw_stage_1/2/3.yaml`
+  with `with_object_mask=false`. Stage it with `--repo EpicPinkPenguin/...` in Section 2.
 
-- **Dataset:** pinned in-config, not on the CLI - `slapo_dmw_stage_1/2/3.yaml` set
-  `dataset.dataset_path: EpicPinkPenguin/visual_distracting_metaworld` (the authors' agent-mask-only
-  release) and `dataset.with_object_mask: false`. Nothing dataset-related is passed on the command line.
-- **Cache:** `dataset.cache_dir` now defaults to `./datasets/slapo/${env.name}` (matching the
-  Section-1 pre-download path), so no override is needed - pre-fetch with the Section-1 command
-  first and Stage 1 cache-hits instead of downloading. `logs/run_slapo_dmw.sh` wraps this command
-  as a launcher - TODO: clean that up later.
-
----
-
-## 5. Run Foreground-MaskLAM (baseline)
-
-Same pipeline, but Stage 1 uses `foreground_masklam_dmw_stage_1` (object-mask union loss, data
-from my repo). Stages 2/3 are the standard MaskLAM configs.
+### 5b. Foreground-MaskLAM (baseline)
 ```bash
-# recommended: pre-fetch the object-mask data first (avoids the train-time build deadlock)
-python scripts/download_dataset.py \
-  --env Meta-World/masked-MT1-<task> \
-  --repo tsakman23/visual_masked_distracting_metaworld --with-object-mask
-
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
-  run_id=fg_masklam_<task>_seed1 \
-  env.name=Meta-World/masked-MT1-<task> \
-  logger.mode=online \
-  logger.group=foreground_masklam \
-  logger.notes="Foreground-MaskLAM <task> seed1" \
-  trainer.compile=True \
-  fabric.precision=bf16-mixed \
-  trainer.random_seed=1 \
+  run_id=fg_masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=foreground_masklam logger.notes="Foreground-MaskLAM <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
   --stage stage_1 -cn foreground_masklam_dmw_stage_1 \
   --stage stage_2 -cn slapo_dmw_stage_2 \
   --stage stage_3 -cn slapo_dmw_stage_3
 ```
-
-- **Dataset:** `foreground_masklam_dmw_stage_1` inherits `slapo_dmw_stage_1` and overrides
-  `dataset.dataset_path: tsakman23/visual_masked_distracting_metaworld` + `dataset.with_object_mask: true`
-  in-config - that swaps in my object-mask repo for Stage 1. Stages 2/3 reuse the stock
-  `slapo_dmw_stage_2/3` unchanged, so they train on the authors' agent-mask release (same
-  trajectories, minus the unused object-mask column).
-- **Cache:** `dataset.cache_dir` defaults to `./datasets/slapo/${env.name}` (set in `sl_default`,
-  matching `download_dataset.py`'s default), so a pre-fetched split cache-hits with no per-run CLI
-  override. HuggingFace namespaces the cache by repo id, so `EpicPinkPenguin___...` and
-  `tsakman23___...` land in separate subdirs and never collide.
-- Regenerated tasks with object masks currently on `tsakman23/visual_masked_distracting_metaworld`:
-  `push-v3`, `door-open-v3`, `sweep-into-v3` have **both** train + test (runnable end-to-end);
-  `handle-pull-v3` and `pick-place-v3` are **test-only** (Stage 1 needs train, so not yet runnable).
-  For a task other than push, add `env.name=Meta-World/masked-MT1-<task>` to the run.
-- The config runs Foreground-MaskLAM as **loss-only**: `object_mask_loss=true`, `object_mask_input=false`.
-  The agent U object union gates the FDM reconstruction loss (so the decoder must reconstruct the
-  object), while the encoder/IDM mask input stays agent-only - so `z_t` remains an embodiment action
-  and the frozen encoder stays consistent with stages 2/3 (which feed it the agent mask).
-- `object_mask_input=true` is an opt-in experiment only (feed the union into the encoder too). It
-  changes what `z_t` encodes and would require threading the union through stages 2/3 - don't enable
-  it without that.
+- Stage 1 uses `foreground_masklam_dmw_stage_1` (object-mask union loss, `tsakman23` data). Stage it
+  with `--repo tsakman23/...` in Section 2. Stages 2/3 reuse the stock `slapo_dmw_stage_2/3` (authors'
+  agent-mask release, same trajectories).
+- **Loss-only** design: `object_mask_loss=true`, `object_mask_input=false`. The agent ∪ object union
+  gates the FDM reconstruction loss (decoder must reconstruct the object), while the encoder/IDM mask
+  input stays agent-only - so `z_t` remains an embodiment action and the frozen encoder stays
+  consistent with stages 2/3 (which feed it the agent mask).
+- `object_mask_input=true` is an opt-in experiment (feed the union into the encoder too); it changes
+  what `z_t` encodes and would need the union threaded through stages 2/3 - don't enable without that.
+- Object-mask tasks on `tsakman23/...`: `push-v3`, `door-open-v3`, `sweep-into-v3` have **both** splits
+  (runnable); `handle-pull-v3`, `pick-place-v3` are **test-only** (Stage 1 needs train - not yet runnable).
 
 ---
 
-## 6. Misc / utilities
+### Visualize MaskLAM vs Foreground-MaskLAM reconstruction
+
+After both Stage-1 checkpoints exist, compare their FDM reconstructions on identical push frames:
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python scripts/compare_reconstruction.py \
+  --env Meta-World/masked-MT1-<task> \
+  --masklam-ckpt checkpoints/slapo_q1_Meta-World_masked-MT1-<task>_seed1-1 \
+  --fg-ckpt      checkpoints/fg_masklam_<task>_seed1-1 \
+  --num-frames 6
+```
+Writes per-frame panels `[GT | MaskLAM pred | FG pred | union overlay | MaskLAM-extra-error]` plus
+`fg_vs_masklam_mse.txt` under `docs/figures/fg_vs_masklam/`. Expected: object-region MSE much higher
+for MaskLAM than FG; agent-region MSE comparably low for both. Reads frames from the object-mask
+dataset, so stage `<task>` (Section 2) first.
+
+---
+
+
+#### Misc / utilities
 
 ```bash
-# Reclaim disk: delete stale partial downloads (ONLY when nothing is downloading)
+# Reclaim disk: delete stale partial HF downloads (ONLY when nothing is downloading)
 find /data2/masklam/datasets/hf_home/hub -name '*.incomplete' -delete
+
+# Free a staged copy from RAM when done with a task
+rm -rf /tmp/slapo_local/<task>
 ```

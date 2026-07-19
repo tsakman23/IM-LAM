@@ -237,13 +237,17 @@ def dcs_masked() -> DictTransform:
 
 
 
-def metaworld(with_object_mask: bool = False) -> DictTransform:
+def metaworld(with_object_mask: bool = False, with_object_state: bool = False) -> DictTransform:
     """Apply dataset transformations for Meta-World environment.
 
     Args:
         with_object_mask (bool): If True, also process an ``object_mask`` column
             with the same mask transform as ``mask`` (used by the
             Foreground-MaskLAM baseline, which needs the manipulated-object mask).
+        with_object_state (bool): If True, also cast an ``object_state`` column
+            (world-frame object position + orientation, present only in the
+            object-mask repos) to float32. Needed by the object-dynamics probe,
+            which regresses k-step object-state deltas from frozen features.
 
     Returns:
        DictTransform: Transformations for Meta-World environment.
@@ -256,15 +260,21 @@ def metaworld(with_object_mask: bool = False) -> DictTransform:
     }
     if with_object_mask:
         transforms["object_mask"] = ProcessMask()
+    if with_object_state:
+        transforms["object_state"] = ToDtype(torch.float32)
     return DictTransform(transforms)
 
-def get_dataset_transform(dataset_name: Optional[str], with_object_mask: bool = False) -> DictTransform:
+def get_dataset_transform(
+    dataset_name: Optional[str], with_object_mask: bool = False, with_object_state: bool = False
+) -> DictTransform:
     """Get dataset transformations for the specified dataset.
 
     Args:
         dataset_name (str): Name of the dataset.
         with_object_mask (bool): If True, Meta-World transforms also process an
             ``object_mask`` column (Foreground-MaskLAM). Ignored for other datasets.
+        with_object_state (bool): If True, Meta-World transforms also process an
+            ``object_state`` column (object-dynamics probe). Ignored for other datasets.
 
     Returns:
         DictTransform: Transformations for the specified dataset.
@@ -283,6 +293,6 @@ def get_dataset_transform(dataset_name: Optional[str], with_object_mask: bool = 
         else:
             return dm_control()
     elif "Meta-World" in dataset_name:
-        return metaworld(with_object_mask=with_object_mask)
+        return metaworld(with_object_mask=with_object_mask, with_object_state=with_object_state)
     else:
         raise NotImplementedError("Dataset is currently not supported.")

@@ -329,6 +329,7 @@ def get_metaworld_dataset(
     transform: Optional[DictTransform] = None,
     path: Optional[str] = None,
     with_object_mask: bool = False,
+    with_object_state: bool = False,
 ) -> MetaWorldDataset:
     """Get the available Meta-World dataset (handles both distracted and vanilla).
     Args:
@@ -343,6 +344,9 @@ def get_metaworld_dataset(
             ``tsakman23/visual_masked_distracting_metaworld``) for Foreground-MaskLAM.
         with_object_mask (bool): If True, also load the ``object_mask`` column
             (only present in the object-mask repos). Required by Foreground-MaskLAM.
+        with_object_state (bool): If True, also load the ``object_state`` column
+            (world-frame object pos + quat; only present in the object-mask repos).
+            Needed by the object-dynamics probe, not by training.
     Returns:
         MetaWorldDataset: Available Meta-World dataset.
     """
@@ -370,6 +374,8 @@ def get_metaworld_dataset(
     columns = ["observation", "mask", "action"]
     if with_object_mask:
         columns.append("object_mask")
+    if with_object_state:
+        columns.append("object_state")
 
     dataset_kwargs = dict(
         name=name,  # bare HF config name, e.g. "basketball-v3"
@@ -393,6 +399,7 @@ def get_dataset(
     block_size: Optional[int] = None,
     dataset_path: Optional[str] = None,
     with_object_mask: bool = False,
+    with_object_state: bool = False,
     **kwargs,
 ) -> Dataset:
     """
@@ -408,12 +415,16 @@ def get_dataset(
             together with ``with_object_mask=True`` for Foreground-MaskLAM.
         with_object_mask (bool): If True, also load and transform the object mask
             (Meta-World only). Required by the Foreground-MaskLAM baseline.
+        with_object_state (bool): If True, also load and transform the object state
+            (Meta-World only; object-mask repos only). Needed by the object-dynamics
+            probe (Sec. 7.4.2 of the proposal), which regresses k-step object-state
+            deltas Delta s = s_{t+k} - s_t from frozen Stage-1 features.
         **kwargs: Additional arguments for the dataset.
 
     Returns:
         Dataset: The dataset object.
     """
-    transform = get_dataset_transform(name, with_object_mask=with_object_mask)
+    transform = get_dataset_transform(name, with_object_mask=with_object_mask, with_object_state=with_object_state)
     if "dm_control" in name:
         if "masked" in name:
             return get_masked_distracting_control_suite_dataset(name, split, cache_dir, block_size, transform)
@@ -423,6 +434,7 @@ def get_dataset(
         return get_metaworld_dataset(
             name, split, cache_dir, block_size, transform,
             path=dataset_path, with_object_mask=with_object_mask,
+            with_object_state=with_object_state,
         )
     else:
         raise NotImplementedError("Dataset is currently not supported for this submission.")

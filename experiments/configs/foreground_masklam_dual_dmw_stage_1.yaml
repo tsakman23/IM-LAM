@@ -1,0 +1,48 @@
+# Foreground-MaskLAM, dual-loss variant - Stage 1.
+#
+# Identical to foreground_masklam_dmw_stage_1 except the FDM reconstruction loss
+# uses two SEPARATELY area-normalized terms (object_dual_loss=true) instead of a
+# single union-gated term (object_mask_loss):
+#
+#   L = L_A + object_loss_weight * L_O
+#
+# where L_A and L_O are each an independent area-normalized masked MSE. Under the
+# union loss, agent and object pixels share one normalization, so a small object
+# mask is outweighed by the much larger agent mask (e.g. push-v3: object pixels
+# are ~0.5% of the agent+object union). The dual loss
+# gives the object its own budget, sized by object_loss_weight, independent of its
+# pixel count.
+#
+# object_dual_loss and object_mask_loss are mutually exclusive (enforced in
+# SLAPOIDMModule.__init__) - only one loss-combination mode may be active.
+#
+# Requires object masks, same as foreground_masklam_dmw_stage_1 (see that file).
+# Stages 2 and 3 are unchanged (use slapo_dmw_stage_2 / slapo_dmw_stage_3).
+defaults:
+  - slapo_dmw_stage_1
+  - _self_
+
+env:
+  name: Meta-World/masked-MT1-push-v3
+
+module:
+  # dual loss: L = L_A + object_loss_weight * L_O, each term independently
+  # area-normalized. object_mask_loss stays false (mutually exclusive with dual).
+  # object_mask_input stays false for the same reason as Foreground-MaskLAM: z_t
+  # must remain an embodiment action, and stages 2/3 reuse the agent-only encoder.
+  object_mask_loss: false
+  object_mask_input: false
+  object_dual_loss: true
+  object_loss_weight: 1.0  # lambda_o; override per-task from the CLI, e.g.
+                           # module.object_loss_weight=0.5
+
+dataset:
+  # Pull observation_distracted + agent mask + object_mask from my regenerated repo.
+  with_object_mask: true
+  dataset_path: tsakman23/visual_masked_distracting_metaworld
+  # Persistent cache that matches scripts/download_dataset.py's default
+  # (./datasets/slapo/<env>), so a pre-fetched split cache-hits at train time. The
+  # base config inherits /tmp/datasets from sl_default, which is ephemeral and would
+  # not match the pre-fetch path - overriding here means no per-run CLI override is
+  # needed. Interpolates env.name so it stays correct if the task is overridden.
+  cache_dir: ./datasets/slapo/${env.name}

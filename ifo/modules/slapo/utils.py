@@ -212,6 +212,100 @@ def dilate_mask(mask: Tensor, radius: int) -> Tensor:
     return F.max_pool2d(mask.view(b * t, c, h, w), kernel_size=kernel_size, stride=1, padding=padding).reshape_as(mask)
 
 
+def area_normalized_masked_mse(error: Tensor, mask: Tensor) -> Tensor:
+    """Area-normalized masked MSE: mean squared error over the pixels inside ``mask``.
+
+    Sums ``error`` (typically the elementwise output of
+    ``F.mse_loss(..., reduction="none")``) over the region where ``mask`` is
+    nonzero, and normalizes by the mask's own area (``mask.sum()``) rather than
+    the total number of pixels. This keeps the loss magnitude comparable across
+    samples with differently sized masks, and is the shared building block for
+    both MaskLAM's single-mask loss and IM-LAM's dual loss below.
+
+    The denominator is floored at one pixel: a batch whose mask is empty
+    everywhere (e.g. the object fully occluded in every sampled target frame,
+    conceivable on the occlusion stress task peg-insert-side) yields a zero
+    loss contribution instead of a 0/0 NaN that would poison training. For
+    binary masks the floor changes nothing else, since any nonempty mask has
+    area >= 1.
+
+    Args:
+        error (Tensor): Elementwise error, broadcastable against ``mask``.
+        mask (Tensor): Binary mask, broadcastable against ``error``.
+
+    Returns:
+        Scalar tensor: ``(error * mask).sum() / mask.sum().clamp(min=1)``.
+    """
+    return (error * mask).sum() / mask.sum().clamp(min=1.0)
+
+
+def dual_masked_reconstruction_loss(
+    error: Tensor, agent_mask: Tensor, object_mask: Tensor, lambda_o: float
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Dual loss: agent and object reconstruction error, each independently normalized.
+
+    L = L_A + lambda_o * L_O, where L_A and L_O are each an
+    :func:`area_normalized_masked_mse` over their own mask. This differs from
+    the alternative union loss (one mask, one shared normalization) in
+    that a small object mask does not have its contribution diluted by the much
+    larger agent mask - each region gets its own budget, sized by ``lambda_o``
+    rather than by relative pixel count.
+
+    Args:
+        error (Tensor): Elementwise error, broadcastable against both masks.
+        agent_mask (Tensor): Binary agent mask.
+        object_mask (Tensor): Binary manipulated-object mask.
+        lambda_o (float): Weight on the object term.
+
+    Returns:
+        Tuple of ``(loss, loss_agent, loss_object)`` scalar tensors, so callers
+        can log each term separately.
+    """
+    loss_agent = area_normalized_masked_mse(error, agent_mask)
+    loss_object = area_normalized_masked_mse(error, object_mask)
+    loss = loss_agent + lambda_o * loss_object
+    return loss, loss_agent, loss_object
+
+
+def dual_loss_grad_norms(
+    loss_agent: Tensor, loss_object: Tensor, params: list
+) -> tuple[Tensor, Tensor]:
+    """Per-term gradient L2 norms of the dual loss w.r.t. shared ``params``.
+
+    Even with per-term area normalization, ``loss_agent`` and ``loss_object`` both
+    backpropagate into the same shared parameters (e.g. the FDM decoder), and
+    normalization alone does not guarantee comparable *gradient* influence there -
+    a term can be unit-scale-normalized and still be gradient-starved if its path
+    through the network has a smaller Jacobian. This computes each term's gradient
+    independently via ``torch.autograd.grad`` (not ``.backward()``), so neither call
+    touches ``.grad`` or disturbs the real optimization backward pass that follows
+    on the combined loss. Both calls use ``retain_graph=True`` since that combined
+    backward pass still needs the graph afterwards.
+
+    Intended as a periodic (not every-step) training-time diagnostic, since each
+    call is an extra backward pass through ``params``.
+
+    Args:
+        loss_agent (Tensor): Scalar agent-region loss term.
+        loss_object (Tensor): Scalar object-region loss term.
+        params (list[Tensor]): Shared parameters both terms flow through.
+
+    Returns:
+        Tuple of scalar tensors ``(grad_norm_agent, grad_norm_object)``, each the
+        global L2 norm of that term's gradient over ``params`` (unused parameters
+        contribute zero).
+    """
+    grads_agent = torch.autograd.grad(loss_agent, params, retain_graph=True, allow_unused=True)
+    grads_object = torch.autograd.grad(loss_object, params, retain_graph=True, allow_unused=True)
+    grad_norm_agent = torch.linalg.vector_norm(
+        torch.stack([g.norm() for g in grads_agent if g is not None])
+    )
+    grad_norm_object = torch.linalg.vector_norm(
+        torch.stack([g.norm() for g in grads_object if g is not None])
+    )
+    return grad_norm_agent, grad_norm_object
+
+
 @torch.compiler.disable()
 @torch.no_grad()
 def erode_mask(mask: torch.Tensor, radius: int) -> torch.Tensor:

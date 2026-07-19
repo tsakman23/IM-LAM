@@ -155,8 +155,35 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   consistent with stages 2/3 (which feed it the agent mask).
 - `object_mask_input=true` is an opt-in experiment (feed the union into the encoder too); it changes
   what `z_t` encodes and would need the union threaded through stages 2/3 - don't enable without that.
-- Object-mask tasks on `tsakman23/...`: `push-v3`, `door-open-v3`, `sweep-into-v3` have **both** splits
-  (runnable); `handle-pull-v3`, `pick-place-v3` are **test-only** (Stage 1 needs train - not yet runnable).
+- Object-mask tasks on `tsakman23/...`: `push-v3`, `door-open-v3`, `sweep-into-v3`, `handle-pull-v3`,
+  `pick-place-v3`, `dial-turn-v3`, `peg-insert-side-v3` all have **both** splits now (runnable).
+
+### 5c. Dual-loss variant (baseline)
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
+  run_id=dual_masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=dual_masklam logger.notes="FG Dual-loss <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn foreground_masklam_dual_dmw_stage_1 module.object_loss_weight=1.0 \
+  --stage stage_2 -cn foreground_masklam_dmw_stage_2 \
+  --stage stage_3 -cn foreground_masklam_dmw_stage_3
+```
+- Stage 1 uses `foreground_masklam_dual_dmw_stage_1` (same `tsakman23` object-mask data as
+  Foreground-MaskLAM, §5b). Stage it with `--repo tsakman23/...` in Section 2. Stages 2/3 use
+  `foreground_masklam_dmw_stage_2/3` (stock stage 2/3 pinned to `tsakman23`), same as 5b.
+- **Loss-only** design, same split as Foreground-MaskLAM: `object_dual_loss=true`,
+  `object_mask_loss=false`, `object_mask_input=false` - agent-only encoder/IDM input, so `z_t` and
+  stages 2/3 stay consistent with 5a/5b.
+- The difference from 5b: `L = L_A + object_loss_weight * L_O`, where `L_A` and `L_O` are each
+  normalized by their **own** mask area, instead of one union mask sharing a single normalization. A
+  small object no longer competes with the much larger agent mask for weight - it gets its own budget,
+  sized by `object_loss_weight` (`lambda_O`) alone. `object_mask_loss` and `object_dual_loss` are
+  mutually exclusive (raises at module init if both are set).
+- Sweep the object weight from the CLI, no yaml edit needed: `module.object_loss_weight=<value>` on the
+  Stage-1 line (default `1.0`).
+- Per-term losses are logged separately to W&B - `reconstruction_loss_agent` / `reconstruction_loss_object`
+  - alongside the combined `reconstruction_loss`, so both terms are visible independently during training.
 
 ---
 

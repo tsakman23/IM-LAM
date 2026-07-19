@@ -143,12 +143,16 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   logger.mode=online logger.group=foreground_masklam logger.notes="Foreground-MaskLAM <task> seed1" \
   trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
   --stage stage_1 -cn foreground_masklam_dmw_stage_1 \
-  --stage stage_2 -cn slapo_dmw_stage_2 \
-  --stage stage_3 -cn slapo_dmw_stage_3
+  --stage stage_2 -cn foreground_masklam_dmw_stage_2 \
+  --stage stage_3 -cn foreground_masklam_dmw_stage_3
 ```
 - Stage 1 uses `foreground_masklam_dmw_stage_1` (object-mask union loss, `tsakman23` data). Stage it
-  with `--repo tsakman23/...` in Section 2. Stages 2/3 reuse the stock `slapo_dmw_stage_2/3` (authors'
-  agent-mask release, same trajectories).
+  with `--repo tsakman23/...` in Section 2. Stages 2/3 use `foreground_masklam_dmw_stage_2/3`, which
+  are the stock stage 2/3 with the dataset pinned to the same `tsakman23` repo - so the whole arm
+  runs on one dataset and no cross-dataset (authors' release vs regenerated) caveat enters the
+  comparison. Only `tsakman23` needs staging for this arm. (Stages 2/3 never read object masks; in
+  the staged-local workflow the `dataset.dataset_path=/tmp/slapo_local` override already fed all
+  stages the staged tsakman23 copy - the pinned configs make the repo-id fallback match.)
 - **Loss-only** design: `object_mask_loss=true`, `object_mask_input=false`. The agent ∪ object union
   gates the FDM reconstruction loss (decoder must reconstruct the object), while the encoder/IDM mask
   input stays agent-only - so `z_t` remains an embodiment action and the frozen encoder stays

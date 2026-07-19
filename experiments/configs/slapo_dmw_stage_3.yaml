@@ -9,7 +9,9 @@ env:
   name: Meta-World/masked-MT1-push-v3
 
 dataset:
-  # Agent-mask-only release; stages 2/3 (latent policy / BC decoder) never read object masks.
-  # Foreground-MaskLAM reuses this config unchanged, so it also trains stages 2/3 on this release.
+  # Authors' agent-mask-only release - used by the MaskLAM baseline arm. The object-loss
+  # arms (Foreground-MaskLAM union/dual, IM-LAM) use foreground_masklam_dmw_stage_3
+  # instead, which pins the regenerated tsakman23 repo so every stage of an arm runs on
+  # the same dataset. Stages 2/3 never read object masks in either case.
   dataset_path: EpicPinkPenguin/visual_distracting_metaworld
   with_object_mask: false

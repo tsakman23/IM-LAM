@@ -1,0 +1,13 @@
+# Foreground-MaskLAM / dual-loss - Stage 3 (BC action decoder).
+#
+# Identical to slapo_dmw_stage_3 except the dataset repo: pinned to the same
+# regenerated tsakman23 repo as stages 1/2 of the object-loss arms, so the whole
+# pipeline of an arm runs on one dataset (see foreground_masklam_dmw_stage_2 for
+# the full rationale). Stage 3 never reads object masks.
+defaults:
+  - slapo_dmw_stage_3
+  - _self_
+
+dataset:
+  dataset_path: tsakman23/visual_masked_distracting_metaworld
+  with_object_mask: false

@@ -1,0 +1,22 @@
+# Foreground-MaskLAM / dual-loss - Stage 2 (latent policy).
+#
+# Identical to slapo_dmw_stage_2 except the dataset repo: the object-loss arms
+# (Foreground-MaskLAM union, dual, and later IM-LAM) train Stage 1 on the
+# regenerated tsakman23 repo, so stages 2/3 pin the SAME repo. This keeps every
+# stage of an arm on one dataset and removes the cross-dataset (authors' release
+# vs regenerated) distribution-shift caveat from the comparison. The regenerated
+# repo is a superset of the authors' release (same trajectory distribution,
+# verified by verify/iid_check.py, plus object_mask/object_state columns).
+#
+# Stage 2 never reads object masks, so with_object_mask stays false - only the
+# repo differs. Note the documented local-mode workflow (dataset.dataset_path=
+# /tmp/slapo_local staged from tsakman23) already fed stages 2/3 the regenerated
+# data, because run_slapo.py applies dataset.dataset_path globally; this config
+# makes the repo-id fallback path consistent with that behaviour.
+defaults:
+  - slapo_dmw_stage_2
+  - _self_
+
+dataset:
+  dataset_path: tsakman23/visual_masked_distracting_metaworld
+  with_object_mask: false

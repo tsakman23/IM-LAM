@@ -98,7 +98,9 @@ class SLAPOExperiment(Experiment):
 
         # Initialize model.
         net = hydra.utils.instantiate(cfg.net)(observation_space=observation_space, action_space=action_space)
-        module = hydra.utils.instantiate(cfg.module, net=net, debug_transform=get_debug_transform(cfg.dataset.name))
+        module = hydra.utils.instantiate(
+            cfg.module, net=net, debug_transform=get_debug_transform(cfg.dataset.name), log_prefix=cfg.trainer.log_prefix
+        )
 
         # Load trained segmentation model if available.
         checkpoint_path = get_latest_checkpoint(cfg.trainer.previous_stage_checkpoint)
@@ -185,7 +187,10 @@ class SLAPOExperiment(Experiment):
         self._configure_wandb_logging(fabric, cfg)
 
         # Configure environment.
-        val_env = hydra.utils.instantiate(cfg.env, record_video=True, run_id=cfg.stage_run_id)
+        # name_prefix scopes the rollout-callback's recorded videos under "stage_3/video" in
+        # W&B instead of an unscoped "videos" key shared by any other recorder in the run
+        # (see VecVideoRecorder.stop_recording).
+        val_env = hydra.utils.instantiate(cfg.env, record_video=True, run_id=cfg.stage_run_id, name_prefix="stage_3")
         action_space = val_env.single_action_space
         observation_space = val_env.single_observation_space
 

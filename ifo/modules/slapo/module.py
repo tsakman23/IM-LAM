@@ -147,6 +147,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         object_dual_loss: bool = False,
         object_loss_weight: float = 1.0,
         log_dual_loss_grad_every: int = 0,
+        log_prefix: Optional[str] = None,
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -195,6 +196,15 @@ class SLAPOIDMModule(SupervisedLightningModule):
                 influence on shared parameters - this checks it directly, at the
                 cost of two extra backward passes every ``log_dual_loss_grad_every``
                 steps. Training-only. 0 (default) disables the diagnostic entirely.
+            log_prefix (Optional[str], optional): Stage scope to prepend to the
+                image-panel keys logged by ``_log_debug_images``/``_log_debug_masks``/
+                ``_log_debug_union_mask`` (e.g. ``"stage_1"``), matching the
+                ``{log_prefix}/{key}`` scheme the Trainer applies to scalar metrics
+                (``ifo.common.trainer.LightningTrainer._log``). These three methods
+                call ``self.logger.experiment.log`` directly instead of returning
+                through the Trainer, so without this they log unscoped keys
+                (``train/pred_next_obs`` instead of ``stage_1/train/pred_next_obs``).
+                Defaults to None (unscoped, e.g. for standalone/non-pipeline use).
         """
         if object_mask_loss and object_dual_loss:
             raise ValueError(
@@ -224,6 +234,16 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.object_dual_loss = object_dual_loss
         self.object_loss_weight = object_loss_weight
         self.log_dual_loss_grad_every = log_dual_loss_grad_every
+        self.log_prefix = log_prefix
+
+    def _scoped_key(self, key: str) -> str:
+        """Prepend ``self.log_prefix`` (e.g. ``"stage_1"``) to a raw ``self.logger.experiment.log`` key.
+
+        Only needed for the ``_log_debug_*`` methods below: they bypass the Trainer's
+        ``_log`` (which applies this same scoping to every scalar metric automatically)
+        and call the W&B run directly, so without this they log unscoped.
+        """
+        return f"{self.log_prefix}/{key}" if self.log_prefix else key
 
     @torch.no_grad()
     @torch.compiler.disable()
@@ -233,7 +253,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         gt_next_obs = self.debug_transform(next_observation)
         self.logger.experiment.log(
             {
-                f"{log_prefix}/pred_next_obs": wandb.Image(
+                self._scoped_key(f"{log_prefix}/pred_next_obs"): wandb.Image(
                     make_comp_grid(pred_next_obs, gt_next_obs),
                     caption="Predicted next state vs ground truth",
                 )
@@ -245,7 +265,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
     def _log_debug_masks(self, mask: Tensor, gt_mask: Tensor, log_prefix: str) -> None:
         self.logger.experiment.log(
             {
-                f"{log_prefix}/mask": wandb.Image(make_comp_grid(mask * 255.0, gt_mask * 255.0), caption="Modified mask vs ground truth"),
+                self._scoped_key(f"{log_prefix}/mask"): wandb.Image(make_comp_grid(mask * 255.0, gt_mask * 255.0), caption="Modified mask vs ground truth"),
             },
         )
 
@@ -279,11 +299,11 @@ class SLAPOIDMModule(SupervisedLightningModule):
         overlay = gt_next_obs * (1.0 - alpha * union_mask) + green * (alpha * union_mask)
         self.logger.experiment.log(
             {
-                f"{log_prefix}/union_mask": wandb.Image(
+                self._scoped_key(f"{log_prefix}/union_mask"): wandb.Image(
                     make_comp_grid(union_mask * 255.0, agent_mask * 255.0),
                     caption="Union (agent U object) mask vs agent-only mask",
                 ),
-                f"{log_prefix}/union_mask_overlay": wandb.Image(
+                self._scoped_key(f"{log_prefix}/union_mask_overlay"): wandb.Image(
                     make_comp_grid(overlay, gt_next_obs),
                     caption="Union mask (green) over next obs vs next obs",
                 ),

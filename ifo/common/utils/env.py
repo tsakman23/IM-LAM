@@ -493,6 +493,7 @@ def make_env(
             video_folder=f"{kwargs['video_folder']}/{kwargs['run_id']}",
             step_trigger=lambda x: (x % (int(kwargs["step_trigger"] / env.num_envs / action_repeat))) == 0,
             video_length=int(kwargs["video_length"]),
+            name_prefix=kwargs.get("name_prefix", "rl-video"),
         )
 
     # Record episode statistics for correct metrics.

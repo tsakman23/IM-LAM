@@ -1,6 +1,5 @@
 import datetime
 import os
-import re
 import uuid
 from collections import deque
 from copy import deepcopy
@@ -369,9 +368,12 @@ class VecVideoRecorder(RecordVideo, VectorWrapper, gym.utils.RecordConstructorAr
             return
         if wandb.run:
             path = os.path.join(self.video_folder, f"{video_name}.mp4")
-            m = re.match(r".+(video\.\d+).+", path)
-            key = m.group(1) if m else "videos"
-            wandb.log({key: wandb.Video(path, format="mp4")})
+            # Scope the key by name_prefix (e.g. "stage_3" for the SLAPO rollout callback)
+            # instead of a bare "videos" key shared by every recorder in the run. The previous
+            # regex looked for a "video.N" substring in the path to derive the key, but
+            # RecordVideo's actual filename pattern is "{name_prefix}-episode-{n}.mp4", so it
+            # never matched and every recording fell through to the same unscoped "videos" key.
+            wandb.log({f"{self.name_prefix}/video": wandb.Video(path, format="mp4")})
 
 
 class DiscretizeMineRLActionWrapper(VectorActionWrapper):

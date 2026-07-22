@@ -1,0 +1,22 @@
+{
+  "push-v3": {
+    "var_a": 0.1382434219121933,
+    "expert_success_rate": 1.0,
+    "n_episodes": 16027
+  },
+  "peg-insert-side-v3": {
+    "var_a": 0.2942318320274353,
+    "expert_success_rate": 0.7836475639350383,
+    "n_episodes": 5357
+  },
+  "sweep-into-v3": {
+    "var_a": 0.26047900319099426,
+    "expert_success_rate": 0.8983068135454917,
+    "n_episodes": 9804
+  },
+  "handle-pull-v3": {
+    "var_a": 0.35317856073379517,
+    "expert_success_rate": 1.0,
+    "n_episodes": 9384
+  }
+}

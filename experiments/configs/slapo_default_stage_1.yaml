@@ -51,6 +51,12 @@ module:
   dilate_mask_radius: 0
   erode_mask: False
   erode_mask_radius: 0
+  # Var(a) for action_decoder_nmse (MaskLAM/LAOM Eq. 5). null (default) means
+  # SLAPOExperiment.stage_1 auto-resolves it from cfg.env.name via
+  # ifo.common.utils.expert_constants.ACTION_VARIANCE - no per-run CLI flag needed.
+  # Set explicitly here (or via module.action_variance=<value> on the CLI) only to
+  # override that lookup, e.g. for a task not yet in the table.
+  action_variance: null
 
 net:
   _target_: ifo.modules.slapo.nets.SLAPOIDM

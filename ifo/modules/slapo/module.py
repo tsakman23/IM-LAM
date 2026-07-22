@@ -148,6 +148,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         object_loss_weight: float = 1.0,
         log_dual_loss_grad_every: int = 0,
         log_prefix: Optional[str] = None,
+        action_variance: Optional[float] = None,
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -205,6 +206,16 @@ class SLAPOIDMModule(SupervisedLightningModule):
                 through the Trainer, so without this they log unscoped keys
                 (``train/pred_next_obs`` instead of ``stage_1/train/pred_next_obs``).
                 Defaults to None (unscoped, e.g. for standalone/non-pipeline use).
+            action_variance (Optional[float], optional): Per-task mean per-dimension
+                variance of the clipped ground-truth actions, Var(a) in the MaskLAM/LAOM
+                NMSE convention (Eq. 5). When set, ``action_decoder_nmse =
+                action_decoder_mse / action_variance`` is additionally logged next to
+                the existing (unnormalized) ``action_decoder_mse``. Defaults to None
+                (metric not logged - this is an online, gradient-isolated probe trained
+                jointly with Stage 1, not the paper's strict protocol of a probe
+                retrained from scratch on a frozen checkpoint; treat NMSE values from
+                this online probe as consistent for comparing your own arms against
+                each other, not as directly comparable to MaskLAM's published numbers).
         """
         if object_mask_loss and object_dual_loss:
             raise ValueError(
@@ -235,6 +246,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.object_loss_weight = object_loss_weight
         self.log_dual_loss_grad_every = log_dual_loss_grad_every
         self.log_prefix = log_prefix
+        self.action_variance = action_variance
 
     def _scoped_key(self, key: str) -> str:
         """Prepend ``self.log_prefix`` (e.g. ``"stage_1"``) to a raw ``self.logger.experiment.log`` key.
@@ -463,6 +475,8 @@ class SLAPOIDMModule(SupervisedLightningModule):
             prefix="action_decoder_",
             metrics=step_dict
         )
+        if self.action_variance is not None and "action_decoder_mse" in step_dict.keys():
+            step_dict["action_decoder_nmse"] = step_dict["action_decoder_mse"] / self.action_variance
         if self.dilate_mask or self.erode_mask:
             step_dict["miou"] = miou
         if loss_agent is not None:

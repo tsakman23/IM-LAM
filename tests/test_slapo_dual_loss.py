@@ -196,6 +196,27 @@ class SLAPOIDMModuleDualLossWiringTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             module._forward(batch, batch_idx=0, batch_len=2, prefix="train")
 
+    def test_action_variance_none_disables_nmse(self):
+        module = _make_module()  # action_variance defaults to None
+        batch = _make_batch(agent_frame=[[1, 1], [0, 0]], object_frame=[[0, 0], [0, 1]])
+
+        step_dict = module._forward(batch, batch_idx=0, batch_len=2, prefix="train")
+
+        self.assertIn("action_decoder_mse", step_dict.keys())
+        self.assertNotIn("action_decoder_nmse", step_dict.keys())
+
+    def test_action_variance_set_divides_mse(self):
+        module = _make_module(action_variance=0.25)
+        batch = _make_batch(agent_frame=[[1, 1], [0, 0]], object_frame=[[0, 0], [0, 1]])
+        # _FakeWorldModelNet's action_distribution has mode 0; set a nonzero target so
+        # the MSE (and thus NMSE) is nonzero and distinguishable from a division no-op.
+        batch["action"][0, FRAME_STACK - 1] = torch.tensor([1.0, 1.0])
+
+        step_dict = module._forward(batch, batch_idx=0, batch_len=2, prefix="train")
+
+        self.assertAlmostEqual(step_dict["action_decoder_mse"].item(), 1.0, places=6)
+        self.assertAlmostEqual(step_dict["action_decoder_nmse"].item(), 1.0 / 0.25, places=6)
+
     def test_default_flags_leave_plain_masked_loss_unchanged(self):
         module = _make_module()  # object_dual_loss=False, object_mask_loss=False
         batch = _make_batch(agent_frame=[[1, 1], [0, 0]], object_frame=[[0, 0], [0, 1]])

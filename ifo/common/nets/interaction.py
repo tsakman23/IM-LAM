@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ifo.common.nets.mask_biased_attention import MaskBiasedAttention
+
 
 class InteractionEmbeddings(nn.Module):
     """Token embeddings for the IM-LAM interaction bottleneck.
@@ -121,3 +123,61 @@ def pool_mask_occupancy(mask: Tensor, grid_hw: Union[int, Tuple[int, int]]) -> T
         raise ValueError(f"input {h}x{w} not divisible by bottleneck grid {gh}x{gw}.")
     occupancy = F.avg_pool2d(mask.float(), kernel_size=(h // gh, w // gw))  # (B, 1, gh, gw)
     return occupancy.reshape(b, gh * gw)
+
+
+class InteractionModule(nn.Module):
+    """The IM-LAM interaction bottleneck.
+
+    Operates on the FDM bottleneck token grid ``B_t`` of shape ``(B, N, dim)``. Currently
+    implements mask-biased entity extraction; the directed agent dynamics (``F_A``), object
+    dynamics (directed cross-attention + ``F_O``), and gated write-back are added in
+    subsequent tasks.
+    # TODO
+
+    ``dim`` and ``num_tokens`` are the bottleneck geometry (channel width and ``H' * W'``),
+    derived by the caller from the FDM encoder's ``final_encoder_shape`` - not free
+    hyperparameters.
+    """
+
+    def __init__(self, dim: int, num_tokens: int, num_heads: int = 4) -> None:
+        """Instantiate the interaction module.
+
+        Args:
+            dim (int): Bottleneck channel width (token dim), e.g. ``192`` for DMW.
+            num_tokens (int): Number of bottleneck cells ``H' * W'``, e.g. ``256`` for DMW.
+            num_heads (int, optional): Attention heads per entity read-out head. Must divide ``dim``.
+        """
+        super().__init__()
+        self.dim = dim
+        self.num_tokens = num_tokens
+        self.embeddings = InteractionEmbeddings(dim, num_tokens)
+        # Two independently parameterized read-out heads. Separate weight sets, together
+        # with the distinct mask biases, are what separate the agent and object read-outs -
+        # which is why the design deliberately carries no per-entity embedding.
+        self.msa_agent = MaskBiasedAttention(dim, num_heads)
+        self.msa_object = MaskBiasedAttention(dim, num_heads)
+
+    def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
+        """Mask-biased entity extraction: read agent/object tokens out of ``B_t``.
+
+        Both read-outs are mask-biased *self*-attention over ``B_t``: queries and keys carry
+        the spatial embedding (and the current-state temporal tag on the query), while the
+        values are the untagged ``B_t`` content. The agent head is biased toward the agent
+        occupancy and the object head toward the object occupancy, so each bottleneck
+        location produces an agent read-out and an object read-out, each reweighted toward
+        its own entity's region.
+
+        Args:
+            b_t (Tensor): Bottleneck token grid ``(B, N, dim)``.
+            w_agent (Tensor): Agent occupancy ``(B, N)`` in ``[0, 1]`` (pooled current-frame mask).
+            w_object (Tensor): Object occupancy ``(B, N)`` in ``[0, 1]``.
+
+        Returns:
+            Tuple[Tensor, Tensor]: agent read-out ``A_t`` and object read-out ``O_t``, each ``(B, N, dim)``.
+        """
+        query = self.embeddings.tag(b_t, temporal="cur")  # B_t + p + e_cur
+        key = self.embeddings.tag(b_t, temporal=None)      # B_t + p
+        value = b_t                                         # untagged content
+        a_t = self.msa_agent(query, key, value, mask_bias=w_agent)
+        o_t = self.msa_object(query, key, value, mask_bias=w_object)
+        return a_t, o_t

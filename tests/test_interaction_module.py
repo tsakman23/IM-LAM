@@ -17,7 +17,11 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ifo.common.nets.interaction import InteractionEmbeddings, pool_mask_occupancy
+from ifo.common.nets.interaction import (
+    InteractionEmbeddings,
+    InteractionModule,
+    pool_mask_occupancy,
+)
 
 
 class InteractionEmbeddingsTest(unittest.TestCase):
@@ -138,6 +142,56 @@ class PoolMaskOccupancyTest(unittest.TestCase):
     def test_non_divisible_grid_raises(self):
         with self.assertRaises((AssertionError, ValueError)):
             pool_mask_occupancy(torch.zeros(1, 1, 5, 5), 2)
+
+
+class EntityExtractionTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.heads, self.n, self.b = 32, 4, 9, 2
+        self.module = InteractionModule(self.dim, num_tokens=self.n, num_heads=self.heads)
+        self.b_t = torch.randn(self.b, self.n, self.dim)
+        self.w_a = torch.rand(self.b, self.n)
+        self.w_o = torch.rand(self.b, self.n)
+
+    def test_extract_shapes(self):
+        a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
+        self.assertEqual(tuple(a_t.shape), (self.b, self.n, self.dim))
+        self.assertEqual(tuple(o_t.shape), (self.b, self.n, self.dim))
+
+    def test_heads_are_separately_parameterized(self):
+        self.assertIsNot(self.module.msa_agent, self.module.msa_object)
+        agent_ids = {id(p) for p in self.module.msa_agent.parameters()}
+        object_ids = {id(p) for p in self.module.msa_object.parameters()}
+        self.assertTrue(agent_ids.isdisjoint(object_ids))
+
+    def test_independent_heads_give_different_readouts_for_same_mask(self):
+        # Same occupancy fed to both -> outputs still differ, because the two heads
+        # have independent weights (this is what separates agent from object).
+        a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_a)
+        self.assertFalse(torch.allclose(a_t, o_t))
+
+    def test_mask_routes_to_matching_head(self):
+        # Make the two heads identical functions; then the only thing distinguishing
+        # a_t from o_t is which occupancy each receives. Swapping the masks must swap
+        # the outputs - proving w_agent drives a_t and w_object drives o_t (not crossed).
+        self.module.msa_object.load_state_dict(self.module.msa_agent.state_dict())
+        a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
+        a_t2, o_t2 = self.module.extract(self.b_t, self.w_o, self.w_a)
+        self.assertTrue(torch.allclose(a_t2, o_t, atol=1e-6))
+        self.assertTrue(torch.allclose(o_t2, a_t, atol=1e-6))
+
+    def test_gradient_flows_to_embeddings_and_both_heads(self):
+        a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
+        (a_t.sum() + o_t.sum()).backward()
+        self.assertGreater(self.module.embeddings.spatial.grad.abs().sum().item(), 0.0)
+        self.assertGreater(self.module.embeddings.temporal_cur.grad.abs().sum().item(), 0.0)
+        self.assertGreater(self.module.msa_agent.beta.grad.abs().sum().item(), 0.0)
+        self.assertGreater(self.module.msa_object.beta.grad.abs().sum().item(), 0.0)
+
+    def test_extract_runs_under_bf16_autocast(self):
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
+        self.assertTrue(torch.isfinite(a_t).all() and torch.isfinite(o_t).all())
 
 
 if __name__ == "__main__":

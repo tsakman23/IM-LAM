@@ -2,11 +2,12 @@
 
 Run:  conda_env/bin/python tests/test_interaction_module.py
 
-Built up task by task. Currently covers the token embeddings: a spatial
-positional embedding (one vector per bottleneck cell) and a temporal embedding
-marking whether a token describes the current or the predicted-next state.
-There is deliberately NO per-entity embedding - agent/object separation comes
-from the distinct mask biases and separate attention weight sets instead.
+Built up task by task. Covers so far:
+  - the token embeddings: a spatial positional embedding (one vector per bottleneck
+    cell) and a temporal embedding marking current vs predicted-next state (no
+    per-entity embedding - separation comes from the mask biases + separate weights);
+  - mask pooling: average-pooling a binary current-frame mask to bottleneck
+    resolution, yielding the (B, N) fractional occupancy W that feeds beta_h * W_j.
 """
 import os
 import sys
@@ -16,7 +17,7 @@ import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from ifo.common.nets.interaction import InteractionEmbeddings
+from ifo.common.nets.interaction import InteractionEmbeddings, pool_mask_occupancy
 
 
 class InteractionEmbeddingsTest(unittest.TestCase):
@@ -82,6 +83,61 @@ class InteractionEmbeddingsTest(unittest.TestCase):
         self.assertGreater(self.emb.spatial.grad.abs().sum().item(), 0.0)
         self.assertGreater(self.emb.temporal_cur.grad.abs().sum().item(), 0.0)
         self.assertGreater(self.emb.temporal_pred.grad.abs().sum().item(), 0.0)
+
+
+class PoolMaskOccupancyTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+
+    def test_shape_dmw_and_finer_grid(self):
+        mask = torch.zeros(2, 1, 128, 128)
+        self.assertEqual(tuple(pool_mask_occupancy(mask, 16).shape), (2, 256))
+        self.assertEqual(tuple(pool_mask_occupancy(mask, 32).shape), (2, 1024))
+
+    def test_full_and_empty_masks(self):
+        self.assertTrue(torch.all(pool_mask_occupancy(torch.ones(2, 1, 4, 4), 2) == 1.0))
+        self.assertTrue(torch.all(pool_mask_occupancy(torch.zeros(2, 1, 4, 4), 2) == 0.0))
+
+    def test_single_cell_and_row_major_order(self):
+        # 4x4 input, 2x2 grid, factor 2. Cells flatten row-major: (0,0)->0, (0,1)->1,
+        # (1,0)->2, (1,1)->3. This ordering must match the row-major flatten of B_t.
+        def cell(rows, cols):
+            m = torch.zeros(1, 1, 4, 4)
+            m[:, :, rows, cols] = 1.0
+            return pool_mask_occupancy(m, 2)[0]
+
+        self.assertTrue(torch.allclose(cell(slice(0, 2), slice(0, 2)), torch.tensor([1.0, 0, 0, 0])))
+        self.assertTrue(torch.allclose(cell(slice(0, 2), slice(2, 4)), torch.tensor([0, 1.0, 0, 0])))
+        self.assertTrue(torch.allclose(cell(slice(2, 4), slice(0, 2)), torch.tensor([0, 0, 1.0, 0])))
+        self.assertTrue(torch.allclose(cell(slice(2, 4), slice(2, 4)), torch.tensor([0, 0, 0, 1.0])))
+
+    def test_fractional_occupancy_is_true_area_fraction(self):
+        # Half of one cell's 2x2=4-pixel patch set to 1 -> occupancy 0.5 (avg-pool the
+        # binary mask, not a resized/thresholded image).
+        m = torch.zeros(1, 1, 4, 4)
+        m[:, :, 0, 0] = 1.0
+        m[:, :, 0, 1] = 1.0  # 2 of the 4 pixels in cell (0,0)
+        self.assertAlmostEqual(pool_mask_occupancy(m, 2)[0, 0].item(), 0.5, places=6)
+
+    def test_pool_factor_is_derived_not_hardcoded(self):
+        # 8x8 input, 2x2 grid -> factor 4 (not 8). A full 4x4 patch at cell (0,0) -> 1.0.
+        m = torch.zeros(1, 1, 8, 8)
+        m[:, :, 0:4, 0:4] = 1.0
+        occ = pool_mask_occupancy(m, 2)
+        self.assertEqual(tuple(occ.shape), (1, 4))
+        self.assertAlmostEqual(occ[0, 0].item(), 1.0, places=6)
+
+    def test_values_in_unit_interval(self):
+        occ = pool_mask_occupancy((torch.rand(2, 1, 8, 8) > 0.5).float(), 4)
+        self.assertTrue(torch.all(occ >= 0.0) and torch.all(occ <= 1.0))
+
+    def test_accepts_bhw_and_bchw(self):
+        m = (torch.rand(2, 4, 4) > 0.5).float()
+        self.assertTrue(torch.allclose(pool_mask_occupancy(m, 2), pool_mask_occupancy(m.unsqueeze(1), 2)))
+
+    def test_non_divisible_grid_raises(self):
+        with self.assertRaises((AssertionError, ValueError)):
+            pool_mask_occupancy(torch.zeros(1, 1, 5, 5), 2)
 
 
 if __name__ == "__main__":

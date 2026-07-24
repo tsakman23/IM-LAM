@@ -1,6 +1,7 @@
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 
@@ -85,3 +86,38 @@ class InteractionEmbeddings(nn.Module):
         if temporal == "pred":
             return out + self.temporal_pred
         raise ValueError(f"temporal must be one of None, 'cur', 'pred'; got {temporal!r}.")
+
+
+def pool_mask_occupancy(mask: Tensor, grid_hw: Union[int, Tuple[int, int]]) -> Tensor:
+    """Average-pool a binary current-frame mask to bottleneck resolution.
+
+    Pools the binary ``{0, 1}`` mask (NOT a resized or re-thresholded image) so each output
+    cell holds the true fractional occupancy in ``[0, 1]`` of its input patch - the soft
+    ``W_j`` that :class:`MaskBiasedAttention` adds as ``beta_h * W_j``. Bilinear resizing of an
+    already-thresholded mask, or thresholding after pooling, would both discard that soft
+    occupancy.
+
+    The pooling factor is *derived* from the input and bottleneck sizes (``input_H // H'``),
+    never hardcoded, so relocating the interaction module to a finer bottleneck (e.g. a
+    ``32 x 32`` grid, the proposal's small-object option) needs no change here.
+
+    Args:
+        mask (Tensor): Binary mask ``(B, 1, H, W)`` or ``(B, H, W)``, values in ``{0, 1}``.
+        grid_hw (Union[int, Tuple[int, int]]): Bottleneck grid size - an int ``g`` meaning
+            ``(g, g)``, or an explicit ``(H', W')``. ``H`` and ``W`` must be divisible by the
+            corresponding grid dimension.
+
+    Returns:
+        Tensor: ``(B, H' * W')`` fractional occupancy in ``[0, 1]``, flattened row-major so it
+        aligns with the row-major flatten of the bottleneck token grid ``B_t``.
+    """
+    if mask.dim() == 3:
+        mask = mask.unsqueeze(1)  # (B, H, W) -> (B, 1, H, W)
+    b, c, h, w = mask.shape
+    if c != 1:
+        raise ValueError(f"expected a single-channel mask, got {c} channels.")
+    gh, gw = (grid_hw, grid_hw) if isinstance(grid_hw, int) else grid_hw
+    if h % gh != 0 or w % gw != 0:
+        raise ValueError(f"input {h}x{w} not divisible by bottleneck grid {gh}x{gw}.")
+    occupancy = F.avg_pool2d(mask.float(), kernel_size=(h // gh, w // gw))  # (B, 1, gh, gw)
+    return occupancy.reshape(b, gh * gw)

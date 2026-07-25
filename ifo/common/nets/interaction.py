@@ -1,9 +1,11 @@
+import math
 from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from ifo.common.nets.impala_cnn import ImpalaResidualBlock
 from ifo.common.nets.mask_biased_attention import MaskBiasedAttention
 
 
@@ -125,27 +127,103 @@ def pool_mask_occupancy(mask: Tensor, grid_hw: Union[int, Tuple[int, int]]) -> T
     return occupancy.reshape(b, gh * gw)
 
 
+class AgentDynamics(nn.Module):
+    """``F_A``: predict the next agent state ``\hat{A}_{t+1}`` from ``A_t`` and the latent action ``z_t``.
+
+    Reuses MaskLAM's latent-injection mechanism: ``z_t`` is projected by a dedicated
+    ``act_proj`` (``Linear(code_dim, dim * num_tokens)``) to a full bottleneck-shaped tensor and
+    concatenated channel-wise with ``A_t``, then a small residual convolutional stack fuses the
+    two. The update is a residual on ``A_t``: ``\hat{A}_{t+1} = A_t + ResBlocks(fuse([A_t, z]))``.
+
+    The ``act_proj`` here is a *separate* instance from any stock ``ImpalaWorldModel.act_proj``: the
+    interaction FDM removes MaskLAM's channel-wise ``z_t`` concat at the decoder input and injects
+    ``z_t`` through ``F_A`` instead. Keeping the same projection mechanism (rather than a cheaper
+    FiLM/additive scheme) means Foreground-MaskLAM and IM-LAM share an identical latent-injection
+    path, so any difference between them is attributable to the interaction module, not to how
+    ``z_t`` enters the FDM.
+
+    Structurally ``F_A`` is one MaskLAM FDM block minus the downsample: a channel-changing conv
+    (``fuse``, analogous to an ``ImpalaEncoderBlock``'s leading conv) followed by residual blocks, at
+    fixed bottleneck resolution. ``num_res_blocks`` therefore mirrors MaskLAM's FDM
+    ``encoder_num_res_blocks`` (``= 2`` in the DMW config), using the same ``ImpalaResidualBlock``
+    class - so ``F_A`` introduces no residual-depth confound versus the Foreground-MaskLAM baseline.
+    ``num_res_blocks`` is a **required keyword-only argument with no default**, so it cannot silently
+    diverge from the FDM: Phase 3 threads the FDM's actual ``encoder_num_res_blocks`` in (a forgotten
+    thread is a loud ``TypeError``, not a hidden ``2``) and asserts ``f_a.num_res_blocks ==
+    encoder_num_res_blocks`` as a guard.
+
+    Assumes a square bottleneck grid (``H' = W' = sqrt(num_tokens)``); DMW's ``16x16`` and the
+    proposal's ``32x32`` small-object option are both square.
+    """
+
+    def __init__(self, dim: int, num_tokens: int, code_dim: int = 128, *, num_res_blocks: int) -> None:
+        """Instantiate F_A.
+
+        Args:
+            dim (int): Bottleneck channel width.
+            num_tokens (int): Number of bottleneck cells ``H' * W'`` (must be a perfect square).
+            code_dim (int, optional): Latent-action dimension ``z_t`` (``128`` for DMW).
+            num_res_blocks (int): IMPALA residual blocks in the fuse stack. **Required, no default** -
+                it must equal MaskLAM's FDM ``encoder_num_res_blocks`` to avoid a residual-depth
+                confound, so the caller (Phase 3's ``InteractionWorldModel``) threads that config value
+                in. Removing the default makes a forgotten thread a loud ``TypeError``, not a silent 2.
+        """
+        super().__init__()
+        side = math.isqrt(num_tokens)
+        if side * side != num_tokens:
+            raise ValueError(
+                f"AgentDynamics assumes a square bottleneck grid; num_tokens={num_tokens} "
+                "is not a perfect square."
+            )
+        self.dim = dim
+        self.side = side
+        self.num_res_blocks = num_res_blocks  # exposed so InteractionWorldModel can assert == encoder_num_res_blocks
+        # Same mechanism as MaskLAM's FDM (own instance): project z_t to the full bottleneck tensor.
+        self.act_proj = nn.Linear(code_dim, dim * num_tokens)
+        self.fuse = nn.Conv2d(2 * dim, dim, kernel_size=3, padding=1) # channel-changing conv, analogous to an ImpalaEncoderBlock's leading conv
+        self.res_blocks = nn.Sequential(*[ImpalaResidualBlock(dim) for _ in range(num_res_blocks)])
+
+    def forward(self, a_t: Tensor, z: Tensor) -> Tensor:
+        """Args: ``a_t`` ``(B, N, dim)`` agent tokens, ``z`` ``(B, code_dim)``. Returns ``(B, N, dim)``."""
+        b, n, d = a_t.shape
+        a_sp = a_t.transpose(1, 2).reshape(b, d, self.side, self.side)        # (B, dim, H', W')
+        z_sp = self.act_proj(z).reshape(b, self.dim, self.side, self.side)    # (B, dim, H', W')
+        delta = self.res_blocks(self.fuse(torch.cat([a_sp, z_sp], dim=1)))    # (B, dim, H', W')
+        a_hat_sp = a_sp + delta                                              # residual on A_t
+        return a_hat_sp.flatten(2).transpose(1, 2)                            # (B, N, dim) tokens
+
+
 class InteractionModule(nn.Module):
     """The IM-LAM interaction bottleneck.
 
-    Operates on the FDM bottleneck token grid ``B_t`` of shape ``(B, N, dim)``. Currently
-    implements mask-biased entity extraction; the directed agent dynamics (``F_A``), object
-    dynamics (directed cross-attention + ``F_O``), and gated write-back are added in
-    subsequent tasks.
-    # TODO
+    Operates on the FDM bottleneck token grid ``B_t`` of shape ``(B, N, dim)``. Implements so far
+    mask-biased entity extraction and directed agent dynamics. The object dynamics 
+    (directed cross-attention + ``F_O``) and gated write-back are added in subsequent 
+    tasks, after which a ``forward`` will compose them.
 
     ``dim`` and ``num_tokens`` are the bottleneck geometry (channel width and ``H' * W'``),
     derived by the caller from the FDM encoder's ``final_encoder_shape`` - not free
-    hyperparameters.
+    hyperparameters. A square grid (``H' = W'``) is assumed by ``F_A``.
     """
 
-    def __init__(self, dim: int, num_tokens: int, num_heads: int = 4) -> None:
+    def __init__(
+        self,
+        dim: int,
+        num_tokens: int,
+        num_heads: int = 4,
+        code_dim: int = 128,
+        *,
+        num_res_blocks: int,
+    ) -> None:
         """Instantiate the interaction module.
 
         Args:
             dim (int): Bottleneck channel width (token dim), e.g. ``192`` for DMW.
             num_tokens (int): Number of bottleneck cells ``H' * W'``, e.g. ``256`` for DMW.
             num_heads (int, optional): Attention heads per entity read-out head. Must divide ``dim``.
+            code_dim (int, optional): Latent-action dimension ``z_t`` (set to 128 in alignment with MaskLAM).
+            num_res_blocks (int): IMPALA residual blocks in ``F_A``'s fuse stack. **Required, no default**;
+                the caller must pass the FDM's ``encoder_num_res_blocks`` so the two cannot drift.
         """
         super().__init__()
         self.dim = dim
@@ -156,6 +234,7 @@ class InteractionModule(nn.Module):
         # which is why the design deliberately carries no per-entity embedding.
         self.msa_agent = MaskBiasedAttention(dim, num_heads)
         self.msa_object = MaskBiasedAttention(dim, num_heads)
+        self.f_a = AgentDynamics(dim, num_tokens, code_dim, num_res_blocks=num_res_blocks)
 
     def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
         """Mask-biased entity extraction: read agent/object tokens out of ``B_t``.
@@ -181,3 +260,11 @@ class InteractionModule(nn.Module):
         a_t = self.msa_agent(query, key, value, mask_bias=w_agent)
         o_t = self.msa_object(query, key, value, mask_bias=w_object)
         return a_t, o_t
+
+    def agent_dynamics(self, a_t: Tensor, z: Tensor) -> Tensor:
+        """``\hat{A}_{t+1} = F_A(A_t, z_t)``: inject the latent action into the agent pathway.
+
+        The object branch has no direct ``z_t`` input; it will attend to this predicted agent
+        transition instead, so this is the sole entry point for ``z_t`` into the FDM's spatial path.
+        """
+        return self.f_a(a_t, z)

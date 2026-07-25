@@ -148,7 +148,7 @@ class EntityExtractionTest(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(0)
         self.dim, self.heads, self.n, self.b = 32, 4, 9, 2
-        self.module = InteractionModule(self.dim, num_tokens=self.n, num_heads=self.heads)
+        self.module = InteractionModule(self.dim, num_tokens=self.n, num_heads=self.heads, num_res_blocks=2)
         self.b_t = torch.randn(self.b, self.n, self.dim)
         self.w_a = torch.rand(self.b, self.n)
         self.w_o = torch.rand(self.b, self.n)
@@ -192,6 +192,68 @@ class EntityExtractionTest(unittest.TestCase):
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
         self.assertTrue(torch.isfinite(a_t).all() and torch.isfinite(o_t).all())
+
+
+class AgentDynamicsTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.heads, self.n, self.b, self.code = 32, 4, 9, 2, 8
+        self.module = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code, num_res_blocks=2
+        )
+        self.a_t = torch.randn(self.b, self.n, self.dim)
+        self.z = torch.randn(self.b, self.code)
+
+    def test_shape(self):
+        a_hat = self.module.agent_dynamics(self.a_t, self.z)
+        self.assertEqual(tuple(a_hat.shape), (self.b, self.n, self.dim))
+
+    def test_latent_action_influences_output(self):
+        # z_t must actually drive the agent transition, not be ignored.
+        a1 = self.module.agent_dynamics(self.a_t, self.z)
+        a2 = self.module.agent_dynamics(self.a_t, torch.randn(self.b, self.code))
+        self.assertFalse(torch.allclose(a1, a2))
+
+    def test_agent_features_influence_output(self):
+        a1 = self.module.agent_dynamics(self.a_t, self.z)
+        a2 = self.module.agent_dynamics(torch.randn(self.b, self.n, self.dim), self.z)
+        self.assertFalse(torch.allclose(a1, a2))
+
+    def test_act_proj_projects_to_full_bottleneck(self):
+        # Reuses MaskLAM's mechanism: Linear(code_dim, dim * num_tokens).
+        self.assertEqual(tuple(self.module.f_a.act_proj.weight.shape), (self.dim * self.n, self.code))
+
+    def test_gradient_flows_to_latent_action(self):
+        # The z_t -> \hat{A}_{t+1} path must carry gradient - this is how L_O reaches z_t later.
+        z = self.z.clone().requires_grad_(True)
+        self.module.agent_dynamics(self.a_t, z).sum().backward()
+        self.assertIsNotNone(z.grad)
+        self.assertGreater(z.grad.abs().sum().item(), 0.0)
+
+    def test_gradient_flows_to_act_proj_and_conv(self):
+        self.module.agent_dynamics(self.a_t, self.z).sum().backward()
+        self.assertGreater(self.module.f_a.act_proj.weight.grad.abs().sum().item(), 0.0)
+        conv_grads = [p.grad for p in self.module.f_a.res_blocks.parameters() if p.grad is not None]
+        self.assertTrue(conv_grads and any(g.abs().sum().item() > 0 for g in conv_grads))
+
+    def test_non_square_grid_raises(self):
+        with self.assertRaises((ValueError, AssertionError)):
+            InteractionModule(self.dim, num_tokens=8, num_heads=self.heads, code_dim=self.code, num_res_blocks=2)
+
+    def test_num_res_blocks_is_required(self):
+        # No default: a forgotten thread must be a loud TypeError, not a silent 2, so F_A's
+        # residual depth cannot drift from the FDM's encoder_num_res_blocks (the confound).
+        with self.assertRaises(TypeError):
+            InteractionModule(self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code)
+
+    def test_num_res_blocks_exposed_for_confound_guard(self):
+        # Stored so InteractionWorldModel can assert f_a.num_res_blocks == encoder_num_res_blocks.
+        self.assertEqual(self.module.f_a.num_res_blocks, 2)
+
+    def test_runs_under_bf16_autocast(self):
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            out = self.module.agent_dynamics(self.a_t, self.z)
+        self.assertTrue(torch.isfinite(out).all())
 
 
 if __name__ == "__main__":

@@ -241,11 +241,22 @@ class InteractionModule(nn.Module):
         # which is why the design deliberately carries no per-entity embedding.
         self.msa_agent = MaskBiasedAttention(dim, num_heads)
         self.msa_object = MaskBiasedAttention(dim, num_heads)
+        # LayerNorm goes exactly where the tags go - on the attention Q/K, never on V. B_t comes from a
+        # norm-free IMPALA encoder with unbounded activation magnitude, so without this the content
+        # logits can dwarf the mask bias beta*W (mask ~ [0, 2] at init), making the mask - the mechanism
+        # that separates the agent and object read-outs - a rounding error, and rendering the logged
+        # beta uninterpretable (healthy-looking beta while masks are effectively ignored). Values stay
+        # unnormalized: A_t/O_t must keep IMPALA scale for F_A's residual conv blocks and for F_O's
+        # residual add. (QK-norm is the documented escalation if extraction still proves unstable.)
+        self.norm_extract = nn.LayerNorm(dim)  # extraction Q/K (shared by both entity heads)
         self.f_a = AgentDynamics(dim, num_tokens, code_dim, num_res_blocks=num_res_blocks)
         # F_O: the genuinely cross-attentive op (object queries attend to agent keys/values), plus a
-        # position-wise FFN, in the standard transformer arrangement. No mask bias here - the
+        # position-wise FFN, in the standard pre-norm transformer arrangement. No mask bias here - the
         # keys are agent tokens by construction.
         self.cross_attn = MaskBiasedAttention(dim, num_heads)
+        self.norm_obj = nn.LayerNorm(dim)    # F_O: object query stream
+        self.norm_ctx = nn.LayerNorm(dim)    # F_O: agent K context (keys only; values stay unnormalized)
+        self.norm_ffn = nn.LayerNorm(dim)    # F_O: pre-norm on the FFN sublayer
         self.ffn = nn.Sequential(
             nn.Linear(dim, mlp_ratio * dim),
             nn.GELU(),
@@ -270,9 +281,10 @@ class InteractionModule(nn.Module):
         Returns:
             Tuple[Tensor, Tensor]: agent read-out ``A_t`` and object read-out ``O_t``, each ``(B, N, dim)``.
         """
-        query = self.embeddings.tag(b_t, temporal="cur")  # B_t + p + e_cur
-        key = self.embeddings.tag(b_t, temporal=None)      # B_t + p
-        value = b_t                                         # untagged content
+        b_norm = self.norm_extract(b_t)                     # normalize Q/K so beta*W is not swamped
+        query = self.embeddings.tag(b_norm, temporal="cur")  # norm(B_t) + p + e_cur
+        key = self.embeddings.tag(b_norm, temporal=None)     # norm(B_t) + p
+        value = b_t                                          # untagged, UNNORMALIZED content
         a_t = self.msa_agent(query, key, value, mask_bias=w_agent)
         o_t = self.msa_object(query, key, value, mask_bias=w_object)
         return a_t, o_t
@@ -329,7 +341,7 @@ class InteractionModule(nn.Module):
                 f"agent_ctx_mode must be one of 'normal', 'no_transition', 'shuffled'; got {agent_ctx_mode!r}."
             )
 
-        query = self.embeddings.tag(o_t, temporal="cur")  # \tilde{O}_t
+        query = self.embeddings.tag(self.norm_obj(o_t), temporal="cur")  # \tilde{O}_t (query pre-normed)
         if self.direct_z_to_object:
             if z is None:
                 raise ValueError("direct_z_to_object=True requires a latent action z.")
@@ -342,9 +354,11 @@ class InteractionModule(nn.Module):
                 .transpose(1, 2)
             )
             query = query + z_tokens
-        # Keys carry the temporal tags, values carry untagged agent content.
-        key = torch.cat([self.embeddings.tag(a_t, "cur"), self.embeddings.tag(a2, a2_temporal)], dim=1)
+        # Keys are pre-normed and temporal-tagged; values carry untagged, unnormalized agent content
+        # (kept at IMPALA scale so the residual add below is like-for-like).
+        a_t_n, a2_n = self.norm_ctx(a_t), self.norm_ctx(a2)
+        key = torch.cat([self.embeddings.tag(a_t_n, "cur"), self.embeddings.tag(a2_n, a2_temporal)], dim=1)
         value = torch.cat([a_t, a2], dim=1)
         context = self.cross_attn(query, key, value, mask_bias=None)  # no bias: keys are agent tokens
-        h = o_t + context               # attention residual on the untagged object content
-        return h + self.ffn(h)          # position-wise FFN residual
+        h = o_t + context                     # attention residual on the untagged object content
+        return h + self.ffn(self.norm_ffn(h))  # pre-norm position-wise FFN residual

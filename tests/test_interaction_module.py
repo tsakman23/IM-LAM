@@ -335,5 +335,42 @@ class ObjectDynamicsTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(out).all())
 
 
+class InteractionNormalizationTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.n, self.b = 32, 9, 2
+        self.module = InteractionModule(self.dim, num_tokens=self.n, num_heads=4, code_dim=8, num_res_blocks=2)
+
+    def test_extract_qk_norm_controls_input_scale(self):
+        # The point of norm_extract: the attention Q/K are scale-controlled regardless of B_t
+        # magnitude, so the mask bias beta*W is not swamped by content logits and the logged beta
+        # stays interpretable. LayerNorm is positive-scale-invariant: norm(B_t) == norm(c*B_t).
+        b_t = torch.randn(self.b, self.n, self.dim)
+        self.assertTrue(
+            torch.allclose(self.module.norm_extract(b_t), self.module.norm_extract(100.0 * b_t), atol=1e-4)
+        )
+
+    def test_extraction_values_stay_unnormalized(self):
+        # Values must keep IMPALA scale (they feed F_A's conv blocks and F_O's residual). Since Q/K
+        # are scale-invariant but V=B_t is not, scaling B_t must still change the read-out - if V were
+        # normalized the whole op would be scale-invariant and the read-outs would coincide.
+        b_t = torch.randn(self.b, self.n, self.dim)
+        w = torch.rand(self.b, self.n)
+        a1, _ = self.module.extract(b_t, w, w)
+        a2, _ = self.module.extract(100.0 * b_t, w, w)
+        self.assertFalse(torch.allclose(a1, a2))
+
+    def test_all_norm_layers_receive_gradient(self):
+        b_t = torch.randn(self.b, self.n, self.dim)
+        w = torch.rand(self.b, self.n)
+        o_t = torch.randn(self.b, self.n, self.dim)
+        a_t = torch.randn(self.b, self.n, self.dim)
+        a_hat = torch.randn(self.b, self.n, self.dim)
+        loss = self.module.extract(b_t, w, w)[0].sum() + self.module.object_dynamics(o_t, a_t, a_hat).sum()
+        loss.backward()
+        for norm in (self.module.norm_extract, self.module.norm_obj, self.module.norm_ctx, self.module.norm_ffn):
+            self.assertGreater(norm.weight.grad.abs().sum().item(), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

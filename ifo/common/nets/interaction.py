@@ -212,6 +212,8 @@ class InteractionModule(nn.Module):
         num_tokens: int,
         num_heads: int = 4,
         code_dim: int = 128,
+        mlp_ratio: int = 4,
+        direct_z_to_object: bool = False,
         *,
         num_res_blocks: int,
     ) -> None:
@@ -220,14 +222,19 @@ class InteractionModule(nn.Module):
         Args:
             dim (int): Bottleneck channel width (token dim), e.g. ``192`` for DMW.
             num_tokens (int): Number of bottleneck cells ``H' * W'``, e.g. ``256`` for DMW.
-            num_heads (int, optional): Attention heads per entity read-out head. Must divide ``dim``.
+            num_heads (int, optional): Attention heads (entity read-outs and directed cross-attention). Must divide ``dim``.
             code_dim (int, optional): Latent-action dimension ``z_t`` (set to 128 in alignment with MaskLAM).
+            mlp_ratio (int, optional): Hidden-width multiplier for ``F_O``'s position-wise FFN.
+            direct_z_to_object (bool, optional): Matched-ablation switch (proposal S8.3). When True, ``z_t``
+                is injected into the object query directly (reusing ``F_A``'s ``act_proj`` so the parameter
+                count is unchanged), breaking the ``z_t -> A_hat -> O_hat`` restriction. Default False.
             num_res_blocks (int): IMPALA residual blocks in ``F_A``'s fuse stack. **Required, no default**;
                 the caller must pass the FDM's ``encoder_num_res_blocks`` so the two cannot drift.
         """
         super().__init__()
         self.dim = dim
         self.num_tokens = num_tokens
+        self.direct_z_to_object = direct_z_to_object
         self.embeddings = InteractionEmbeddings(dim, num_tokens)
         # Two independently parameterized read-out heads. Separate weight sets, together
         # with the distinct mask biases, are what separate the agent and object read-outs -
@@ -235,6 +242,15 @@ class InteractionModule(nn.Module):
         self.msa_agent = MaskBiasedAttention(dim, num_heads)
         self.msa_object = MaskBiasedAttention(dim, num_heads)
         self.f_a = AgentDynamics(dim, num_tokens, code_dim, num_res_blocks=num_res_blocks)
+        # F_O: the genuinely cross-attentive op (object queries attend to agent keys/values), plus a
+        # position-wise FFN, in the standard transformer arrangement. No mask bias here - the
+        # keys are agent tokens by construction.
+        self.cross_attn = MaskBiasedAttention(dim, num_heads)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, mlp_ratio * dim),
+            nn.GELU(),
+            nn.Linear(mlp_ratio * dim, dim),
+        )
 
     def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
         """Mask-biased entity extraction: read agent/object tokens out of ``B_t``.
@@ -268,3 +284,67 @@ class InteractionModule(nn.Module):
         transition instead, so this is the sole entry point for ``z_t`` into the FDM's spatial path.
         """
         return self.f_a(a_t, z)
+
+    def object_dynamics(
+        self,
+        o_t: Tensor,
+        a_t: Tensor,
+        a_hat: Tensor,
+        z: Optional[Tensor] = None,
+        agent_ctx_mode: str = "normal",
+    ) -> Tensor:
+        """``\hat{O}_{t+1} = F_O(O_t, CrossAttn(O_t -> [A_t, \hat{A}_{t+1}]))``: directed object dynamics.
+
+        The object query attends to the current and predicted agent tokens (keys tagged with the
+        current/predicted temporal embeddings; values are the untagged agent content), then a
+        position-wise FFN follows, in the standard transformer arrangement (attention residual on
+        ``O_t``, then FFN residual). This is the one genuinely cross-attentive op in the model, and the
+        only route by which ``z_t`` reaches the object prediction (through ``\hat{A}_{t+1} = F_A(A_t, z_t)``) -
+        the architectural restriction the hypothesis tests.
+
+        Args:
+            o_t (Tensor): Object read-out ``(B, N, dim)``.
+            a_t (Tensor): Current agent read-out ``(B, N, dim)``.
+            a_hat (Tensor): Predicted next-agent tokens ``\hat{A}_{t+1}`` ``(B, N, dim)``.
+            z (Optional[Tensor]): Latent action ``(B, code_dim)``. Only used when
+                ``direct_z_to_object`` is set (the matched ablation); otherwise ignored.
+            agent_ctx_mode (str): Eval-time substitution for the agent-path diagnostic (no retraining):
+                ``"normal"`` uses ``[\tilde{A}_t, \tilde{A}_{t+1}]``; ``"no_transition"`` replaces the predicted block
+                with the current one (``[\tilde{A}_t, \tilde{A}_t]``); ``"shuffled"`` replaces the predicted block with a
+                batch-rolled copy (each sample gets another sample's predicted context).
+
+        Returns:
+            Tensor: predicted object tokens ``\hat{O}_{t+1}`` ``(B, N, dim)``.
+        """
+        if agent_ctx_mode == "normal":
+            a2, a2_temporal = a_hat, "pred"
+        elif agent_ctx_mode == "no_transition":
+            a2, a2_temporal = a_t, "cur"
+        elif agent_ctx_mode == "shuffled":
+            # Roll by 1 along the batch: a deterministic derangement (no sample keeps its own
+            # predicted context), unlike a random permutation which can leave fixed points.
+            a2, a2_temporal = torch.roll(a_hat, shifts=1, dims=0), "pred"
+        else:
+            raise ValueError(
+                f"agent_ctx_mode must be one of 'normal', 'no_transition', 'shuffled'; got {agent_ctx_mode!r}."
+            )
+
+        query = self.embeddings.tag(o_t, temporal="cur")  # \tilde{O}_t
+        if self.direct_z_to_object:
+            if z is None:
+                raise ValueError("direct_z_to_object=True requires a latent action z.")
+            # Reuse F_A's act_proj (no new parameters) so IM-LAM and this ablation match in param count.
+            b = z.shape[0]
+            z_tokens = (
+                self.f_a.act_proj(z)
+                .reshape(b, self.dim, self.f_a.side, self.f_a.side)
+                .flatten(2)
+                .transpose(1, 2)
+            )
+            query = query + z_tokens
+        # Keys carry the temporal tags, values carry untagged agent content.
+        key = torch.cat([self.embeddings.tag(a_t, "cur"), self.embeddings.tag(a2, a2_temporal)], dim=1)
+        value = torch.cat([a_t, a2], dim=1)
+        context = self.cross_attn(query, key, value, mask_bias=None)  # no bias: keys are agent tokens
+        h = o_t + context               # attention residual on the untagged object content
+        return h + self.ffn(h)          # position-wise FFN residual

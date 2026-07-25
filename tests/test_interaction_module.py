@@ -256,5 +256,84 @@ class AgentDynamicsTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(out).all())
 
 
+class ObjectDynamicsTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.heads, self.n, self.b, self.code = 32, 4, 9, 4, 8
+        self.module = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code, num_res_blocks=2
+        )
+        self.o_t = torch.randn(self.b, self.n, self.dim)
+        self.a_t = torch.randn(self.b, self.n, self.dim)
+        self.a_hat = torch.randn(self.b, self.n, self.dim)
+        self.z = torch.randn(self.b, self.code)
+
+    def test_shape(self):
+        o_hat = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat)
+        self.assertEqual(tuple(o_hat.shape), (self.b, self.n, self.dim))
+
+    def test_object_attends_to_predicted_agent(self):
+        # The hypothesis: object dynamics depend on the predicted agent transition.
+        o1 = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat)
+        o2 = self.module.object_dynamics(self.o_t, self.a_t, torch.randn(self.b, self.n, self.dim))
+        self.assertFalse(torch.allclose(o1, o2))
+
+    def test_object_uses_current_agent(self):
+        o1 = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat)
+        o2 = self.module.object_dynamics(self.o_t, torch.randn(self.b, self.n, self.dim), self.a_hat)
+        self.assertFalse(torch.allclose(o1, o2))
+
+    def test_no_direct_z_by_default(self):
+        # Default: the object branch has NO direct z_t path (z flows only via A_hat).
+        o1 = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, z=self.z)
+        o2 = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, z=torch.randn(self.b, self.code))
+        self.assertTrue(torch.allclose(o1, o2))
+
+    def test_direct_z_to_object_flag_injects_z(self):
+        # Matched ablation: with the flag on, z_t enters the object query directly.
+        mod = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code,
+            direct_z_to_object=True, num_res_blocks=2,
+        )
+        o1 = mod.object_dynamics(self.o_t, self.a_t, self.a_hat, z=self.z)
+        o2 = mod.object_dynamics(self.o_t, self.a_t, self.a_hat, z=torch.randn(self.b, self.code))
+        self.assertFalse(torch.allclose(o1, o2))
+
+    def test_direct_z_requires_z(self):
+        mod = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code,
+            direct_z_to_object=True, num_res_blocks=2,
+        )
+        with self.assertRaises((ValueError, TypeError)):
+            mod.object_dynamics(self.o_t, self.a_t, self.a_hat, z=None)
+
+    def test_agent_ctx_mode_no_transition_differs(self):
+        # Diagnostic substitution (eval-time): replace the predicted block with the current one.
+        normal = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, agent_ctx_mode="normal")
+        no_trans = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, agent_ctx_mode="no_transition")
+        self.assertFalse(torch.allclose(normal, no_trans))
+
+    def test_agent_ctx_mode_shuffled_differs(self):
+        normal = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, agent_ctx_mode="normal")
+        shuffled = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, agent_ctx_mode="shuffled")
+        self.assertFalse(torch.allclose(normal, shuffled))
+
+    def test_invalid_agent_ctx_mode_raises(self):
+        with self.assertRaises(ValueError):
+            self.module.object_dynamics(self.o_t, self.a_t, self.a_hat, agent_ctx_mode="bogus")
+
+    def test_gradient_flows_to_predicted_agent(self):
+        # The z_t -> A_hat -> O_hat path: L_O must reach A_hat (and thence z_t).
+        a_hat = self.a_hat.clone().requires_grad_(True)
+        self.module.object_dynamics(self.o_t, self.a_t, a_hat).sum().backward()
+        self.assertIsNotNone(a_hat.grad)
+        self.assertGreater(a_hat.grad.abs().sum().item(), 0.0)
+
+    def test_runs_under_bf16_autocast(self):
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            out = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat)
+        self.assertTrue(torch.isfinite(out).all())
+
+
 if __name__ == "__main__":
     unittest.main()

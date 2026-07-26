@@ -372,5 +372,131 @@ class InteractionNormalizationTest(unittest.TestCase):
             self.assertGreater(norm.weight.grad.abs().sum().item(), 0.0)
 
 
+class WriteBackTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.heads, self.side, self.n, self.b = 32, 4, 3, 9, 2
+        self.module = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=8, num_res_blocks=2
+        )
+        self.b_t = torch.randn(self.b, self.dim, self.side, self.side)   # spatial bottleneck
+        self.a_hat = torch.randn(self.b, self.n, self.dim)
+        self.o_hat = torch.randn(self.b, self.n, self.dim)
+        self.w_a = torch.rand(self.b, self.n)
+        self.w_o = torch.rand(self.b, self.n)
+
+    def test_write_back_shape(self):
+        b_hat = self.module.write_back(self.b_t, self.a_hat, self.o_hat, self.w_a, self.w_o)
+        self.assertEqual(tuple(b_hat.shape), (self.b, self.dim, self.side, self.side))
+
+    def test_proj_zero_initialized(self):
+        self.assertTrue(torch.all(self.module.proj_a.weight == 0))
+        self.assertTrue(torch.all(self.module.proj_o.weight == 0))
+        self.assertTrue(torch.all(self.module.proj_a.bias == 0))
+        self.assertTrue(torch.all(self.module.proj_o.bias == 0))
+
+    def test_write_back_is_identity_at_init(self):
+        # Zero-init Proj => Delta B = 0 => B_hat == B_t bitwise (graceful-degradation guarantee).
+        b_hat = self.module.write_back(self.b_t, self.a_hat, self.o_hat, self.w_a, self.w_o)
+        self.assertTrue(torch.equal(b_hat, self.b_t))
+
+    def test_proj_receives_gradient_despite_zero_init(self):
+        # The zero-conv leaves zero on the first step: grad w.r.t. the Proj weight depends on its
+        # input, not its (zero) value, so the interaction path opens from step 1.
+        ones = torch.ones(self.b, self.n)
+        self.module.write_back(self.b_t, self.a_hat, self.o_hat, ones, ones).sum().backward()
+        self.assertGreater(self.module.proj_a.weight.grad.abs().sum().item(), 0.0)
+        self.assertGreater(self.module.proj_o.weight.grad.abs().sum().item(), 0.0)
+
+    def test_write_back_gated_by_occupancy(self):
+        # With non-zero Proj: zero occupancy => no update (gate kills it); non-zero => update.
+        with torch.no_grad():
+            self.module.proj_a.weight.fill_(0.1)
+            self.module.proj_o.weight.fill_(0.1)
+        zero = torch.zeros(self.b, self.n)
+        self.assertTrue(torch.equal(self.module.write_back(self.b_t, self.a_hat, self.o_hat, zero, zero), self.b_t))
+        ones = torch.ones(self.b, self.n)
+        self.assertFalse(torch.allclose(self.module.write_back(self.b_t, self.a_hat, self.o_hat, ones, ones), self.b_t))
+
+    def test_dilate_expands_occupancy(self):
+        # A one-hot occupancy cell should, after dilation, gate its neighbours too.
+        occ = torch.zeros(1, 1, self.side, self.side)
+        occ[0, 0, 1, 1] = 1.0
+        dilated = self.module.dilate(occ)
+        self.assertGreater(dilated[0, 0, 0, 0].item(), 0.0)
+
+    def test_dilate_iters_must_be_at_least_1(self):
+        # dilate_iters=0 reopens the t+1-coverage gap the dilation exists to close.
+        with self.assertRaises(ValueError):
+            InteractionModule(self.dim, num_tokens=self.n, num_heads=self.heads, num_res_blocks=2, dilate_iters=0)
+
+
+class InteractionForwardTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.dim, self.heads, self.side, self.n, self.b, self.code = 32, 4, 3, 9, 2, 8
+        self.module = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code, num_res_blocks=2
+        )
+        self.b_t = torch.randn(self.b, self.dim, self.side, self.side)
+        self.w_a = torch.rand(self.b, self.n)
+        self.w_o = torch.rand(self.b, self.n)
+        self.z = torch.randn(self.b, self.code)
+
+    def test_forward_shape(self):
+        b_hat = self.module(self.b_t, self.w_a, self.w_o, self.z)
+        self.assertEqual(tuple(b_hat.shape), (self.b, self.dim, self.side, self.side))
+
+    def test_forward_is_identity_at_init(self):
+        # The whole module is a zero-init residual on B_t: at init it is an exact no-op, so it can
+        # only underperform its MaskLAM backbone by actively learning to.
+        self.assertTrue(torch.equal(self.module(self.b_t, self.w_a, self.w_o, self.z), self.b_t))
+
+    def test_forward_not_identity_after_proj_nonzero(self):
+        with torch.no_grad():
+            self.module.proj_a.weight.fill_(0.05)
+        self.assertFalse(torch.allclose(self.module(self.b_t, self.w_a, self.w_o, self.z), self.b_t))
+
+    def test_forward_return_attn_contract(self):
+        out = self.module(self.b_t, self.w_a, self.w_o, self.z)
+        self.assertIsInstance(out, torch.Tensor)
+        b_hat, attn = self.module(self.b_t, self.w_a, self.w_o, self.z, return_attn=True)
+        self.assertEqual(tuple(attn.shape), (self.b, self.heads, self.n, 2 * self.n))
+
+    def test_forward_runs_under_bf16_autocast(self):
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            b_hat = self.module(self.b_t, self.w_a, self.w_o, self.z)
+        self.assertTrue(torch.isfinite(b_hat).all())
+
+    def test_identity_survives_orthogonal_init_after_zero_init_write_back(self):
+        # orthogonal_init (which the DMW config runs) re-inits every Conv2d, including the write-back
+        # projections, and would silently destroy the identity; zero_init_write_back() must restore it.
+        from ifo.common.utils.functions import orthogonal_init
+
+        self.module.apply(orthogonal_init)
+        self.assertFalse(torch.equal(self.module(self.b_t, self.w_a, self.w_o, self.z), self.b_t))
+        self.module.zero_init_write_back()
+        self.assertTrue(torch.equal(self.module(self.b_t, self.w_a, self.w_o, self.z), self.b_t))
+
+    def test_forward_threads_agent_ctx_mode(self):
+        # forward must thread agent_ctx_mode through to b_hat (else the agent-path ratios silently read 1.0).
+        with torch.no_grad():
+            self.module.proj_o.weight.fill_(0.05)  # open the object write-back so o_hat reaches b_hat
+        normal = self.module(self.b_t, self.w_a, self.w_o, self.z, agent_ctx_mode="normal")
+        no_trans = self.module(self.b_t, self.w_a, self.w_o, self.z, agent_ctx_mode="no_transition")
+        self.assertFalse(torch.allclose(normal, no_trans))
+
+    def test_forward_threads_direct_z(self):
+        mod = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code,
+            num_res_blocks=2, direct_z_to_object=True,
+        )
+        with torch.no_grad():
+            mod.proj_o.weight.fill_(0.05)
+        o1 = mod(self.b_t, self.w_a, self.w_o, self.z)
+        o2 = mod(self.b_t, self.w_a, self.w_o, torch.randn(self.b, self.code))
+        self.assertFalse(torch.allclose(o1, o2))
+
+
 if __name__ == "__main__":
     unittest.main()

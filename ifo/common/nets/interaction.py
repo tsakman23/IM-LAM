@@ -214,6 +214,7 @@ class InteractionModule(nn.Module):
         code_dim: int = 128,
         mlp_ratio: int = 4,
         direct_z_to_object: bool = False,
+        dilate_iters: int = 1,
         *,
         num_res_blocks: int,
     ) -> None:
@@ -228,13 +229,22 @@ class InteractionModule(nn.Module):
             direct_z_to_object (bool, optional): Matched-ablation switch (proposal S8.3). When True, ``z_t``
                 is injected into the object query directly (reusing ``F_A``'s ``act_proj`` so the parameter
                 count is unchanged), breaking the ``z_t -> A_hat -> O_hat`` restriction. Default False.
+            dilate_iters (int, optional): How many times the write-back applies the 3x3 max-pool dilation
+                to the current-frame gates. Each pass expands the gate outward by one bottleneck cell so it
+                can cover positions the entity occupies at t+1 but not at t (~8 input px per pass). Default 1.
             num_res_blocks (int): IMPALA residual blocks in ``F_A``'s fuse stack. **Required, no default**;
                 the caller must pass the FDM's ``encoder_num_res_blocks`` so the two cannot drift.
         """
         super().__init__()
+        if dilate_iters < 1:
+            raise ValueError(
+                f"dilate_iters must be >= 1 (0 reopens the t+1-coverage gap Dilate exists to close); got {dilate_iters}."
+            )
         self.dim = dim
         self.num_tokens = num_tokens
+        self.side = math.isqrt(num_tokens)  # square grid guaranteed by AgentDynamics below
         self.direct_z_to_object = direct_z_to_object
+        self.dilate_iters = dilate_iters
         self.embeddings = InteractionEmbeddings(dim, num_tokens)
         # Two independently parameterized read-out heads. Separate weight sets, together
         # with the distinct mask biases, are what separate the agent and object read-outs -
@@ -262,6 +272,38 @@ class InteractionModule(nn.Module):
             nn.GELU(),
             nn.Linear(mlp_ratio * dim, dim),
         )
+        # Gated write-back. Proj_A/Proj_O are the learnable gate on the residual update, ZERO-INITIALIZED
+        # so B_hat = B_t exactly at init (the whole module is an identity residual until it learns). They
+        # still receive gradient (a zero-conv: grad w.r.t. weight depends on the input, not the value), so
+        # the interaction path opens from step 1. Their norms are logged from step 0 (must grow off zero).
+        self.proj_a = nn.Conv2d(dim, dim, kernel_size=1)
+        self.proj_o = nn.Conv2d(dim, dim, kernel_size=1)
+        self.zero_init_write_back()
+        # Soft dilation of the current-frame gates (max-pool keeps them in [0, 1]).
+        self.dilate = nn.MaxPool2d(kernel_size=3, stride=1, padding=1)
+
+    def zero_init_write_back(self) -> None:
+        """Zero the write-back projections so ``B_hat == B_t`` at init (identity / graceful degradation).
+
+        ControlNet-style zero-conv (https://arxiv.org/abs/2302.05543): the output is exactly ``B_t`` at
+        init but the projections still receive gradient (grad w.r.t. weight depends on the input, not the
+        zero value), so the interaction path opens from step 1. **Must be re-callable, and re-called after
+        any global init:** ``orthogonal_init`` (which the DMW config runs via ``use_orthogonal_init=True``)
+        re-inits every ``Conv2d`` and would otherwise make ``Proj`` non-zero and silently destroy the
+        identity. Phase 3's ``InteractionWorldModel`` calls this last, after its orthogonal init.
+        """
+        for proj in (self.proj_a, self.proj_o):
+            nn.init.zeros_(proj.weight)
+            nn.init.zeros_(proj.bias)
+
+    def _to_spatial(self, tokens: Tensor) -> Tensor:
+        """(B, N, dim) -> (B, dim, H', W') (row-major, matching the occupancy/pooling order)."""
+        b, n, d = tokens.shape
+        return tokens.transpose(1, 2).reshape(b, d, self.side, self.side)
+
+    def _to_tokens(self, spatial: Tensor) -> Tensor:
+        """(B, dim, H', W') -> (B, N, dim)."""
+        return spatial.flatten(2).transpose(1, 2)
 
     def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
         """Mask-biased entity extraction: read agent/object tokens out of ``B_t``.
@@ -304,7 +346,8 @@ class InteractionModule(nn.Module):
         a_hat: Tensor,
         z: Optional[Tensor] = None,
         agent_ctx_mode: str = "normal",
-    ) -> Tensor:
+        return_attn: bool = False,
+    ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
         """``\hat{O}_{t+1} = F_O(O_t, CrossAttn(O_t -> [A_t, \hat{A}_{t+1}]))``: directed object dynamics.
 
         The object query attends to the current and predicted agent tokens (keys tagged with the
@@ -324,9 +367,11 @@ class InteractionModule(nn.Module):
                 ``"normal"`` uses ``[\tilde{A}_t, \tilde{A}_{t+1}]``; ``"no_transition"`` replaces the predicted block
                 with the current one (``[\tilde{A}_t, \tilde{A}_t]``); ``"shuffled"`` replaces the predicted block with a
                 batch-rolled copy (each sample gets another sample's predicted context).
+            return_attn (bool): If True, also return the object->agent attention weights
+                ``(B, num_heads, N, 2N)`` for the qualitative diagnostics. Off by default.
 
         Returns:
-            Tensor: predicted object tokens ``\hat{O}_{t+1}`` ``(B, N, dim)``.
+            Tensor ``(B, N, dim)``, or ``(o_hat, attn)`` when ``return_attn``.
         """
         if agent_ctx_mode == "normal":
             a2, a2_temporal = a_hat, "pred"
@@ -359,6 +404,78 @@ class InteractionModule(nn.Module):
         a_t_n, a2_n = self.norm_ctx(a_t), self.norm_ctx(a2)
         key = torch.cat([self.embeddings.tag(a_t_n, "cur"), self.embeddings.tag(a2_n, a2_temporal)], dim=1)
         value = torch.cat([a_t, a2], dim=1)
-        context = self.cross_attn(query, key, value, mask_bias=None)  # no bias: keys are agent tokens
-        h = o_t + context                     # attention residual on the untagged object content
-        return h + self.ffn(self.norm_ffn(h))  # pre-norm position-wise FFN residual
+        # no mask bias: keys are agent tokens by construction.
+        cross = self.cross_attn(query, key, value, mask_bias=None, return_attn=return_attn)
+        context, attn = cross if return_attn else (cross, None)
+        h = o_t + context                       # attention residual on the untagged object content
+        o_hat = h + self.ffn(self.norm_ffn(h))  # pre-norm position-wise FFN residual
+        return (o_hat, attn) if return_attn else o_hat
+
+    def _dilate_gate(self, occupancy: Tensor) -> Tensor:
+        """Soft-dilate a flat occupancy ``(B, N)`` to a spatial gate ``(B, 1, H', W')``."""
+        gate = occupancy.reshape(occupancy.shape[0], 1, self.side, self.side)
+        for _ in range(self.dilate_iters):
+            gate = self.dilate(gate)
+        return gate
+
+    def write_back(self, b_t: Tensor, a_hat: Tensor, o_hat: Tensor, w_agent: Tensor, w_object: Tensor) -> Tensor:
+        """Mask-gated, zero-init residual write-back into the FDM bottleneck.
+
+        ``B_hat_{t+1} = B_t + Dilate(W^A) . Proj_A(A_hat) + Dilate(W^O) . Proj_O(O_hat)``. Each entity's
+        update is confined to its own (dilated) current-frame region, and the projections are
+        zero-initialized, so at init ``B_hat == B_t`` exactly: the (untested, randomly-initialized)
+        interaction machinery starts dormant and is learned as a residual, so it cannot disrupt the base
+        encoder-decoder at init. NB this is identity at IM-LAM's *own* init - the encoder/decoder are
+        freshly initialized, not a warm start from a trained MaskLAM, and since ``Proj_A`` sits on the
+        only ``z_t`` path, at init the FDM is action-blind (predicts o_{t+1} from o_t alone). ``Proj`` is
+        still a zero-conv (its gradient depends on its input, not its value), so it leaves zero on the
+        first step and the ``z_t`` pathway opens from step 1. The dilation covers positions the entity
+        moves into at ``t+1`` but not present at ``t`` (current-frame masks route; target-frame masks
+        supervise).
+
+        Args:
+            b_t (Tensor): Bottleneck feature map ``(B, dim, H', W')`` (the residual stream).
+            a_hat (Tensor): Predicted agent tokens ``(B, N, dim)``.
+            o_hat (Tensor): Predicted object tokens ``(B, N, dim)``.
+            w_agent (Tensor): Agent occupancy ``(B, N)`` in ``[0, 1]`` (current-frame).
+            w_object (Tensor): Object occupancy ``(B, N)`` in ``[0, 1]``.
+
+        Returns:
+            Tensor: predicted bottleneck ``B_hat_{t+1}`` ``(B, dim, H', W')``.
+        """
+        delta_a = self._dilate_gate(w_agent) * self.proj_a(self._to_spatial(a_hat))
+        delta_o = self._dilate_gate(w_object) * self.proj_o(self._to_spatial(o_hat))
+        return b_t + delta_a + delta_o
+
+    def forward(
+        self,
+        b_t: Tensor,
+        w_agent: Tensor,
+        w_object: Tensor,
+        z: Tensor,
+        agent_ctx_mode: str = "normal",
+        return_attn: bool = False,
+    ) -> Union[Tensor, Tuple[Tensor, Tensor]]:
+        """Full interaction bottleneck: ``B_t -> B_hat_{t+1}`` via the directed agent->object pathway.
+
+        Composes extraction, agent dynamics (``F_A``), directed object dynamics (``F_O``), and the gated
+        write-back. Because the write-back is zero-initialized, this is an exact identity on ``B_t`` at init.
+
+        Args:
+            b_t (Tensor): Bottleneck feature map ``(B, dim, H', W')`` from the FDM encoder.
+            w_agent (Tensor): Agent occupancy ``(B, N)`` in ``[0, 1]`` (pooled current-frame mask).
+            w_object (Tensor): Object occupancy ``(B, N)`` in ``[0, 1]``.
+            z (Tensor): Latent action ``(B, code_dim)``.
+            agent_ctx_mode (str): Eval-time agent-path substitution (see `object_dynamics`).
+            return_attn (bool): If True, also return the object->agent attention weights.
+
+        Returns:
+            Tensor ``(B, dim, H', W')``, or ``(b_hat, attn)`` when ``return_attn``.
+        """
+        tokens = self._to_tokens(b_t)
+        a_t, o_t = self.extract(tokens, w_agent, w_object)
+        a_hat = self.agent_dynamics(a_t, z)
+        obj = self.object_dynamics(o_t, a_t, a_hat, z=z, agent_ctx_mode=agent_ctx_mode, return_attn=return_attn)
+        o_hat, attn = obj if return_attn else (obj, None)
+        b_hat = self.write_back(b_t, a_hat, o_hat, w_agent, w_object)
+        return (b_hat, attn) if return_attn else b_hat

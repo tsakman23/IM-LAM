@@ -137,31 +137,23 @@ class SLAPOIDM(nn.Module):
         if use_orthogonal_init:
             self.apply(orthogonal_init)
 
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tuple[Tensor, Distribution, Tensor, Tensor]:
-        """
-        Forward pass.
+    def _encode_action(self, observation: Tensor) -> Tuple[Tensor, Tensor, Tensor, Distribution]:
+        """Shared IDM computation: (already mask-catted) observation -> latent action + action head.
 
-        Args:
-            x (Tensor): Sequence of observations from o_{t-frame_stack+1} ... o_{t+future_obs_offset}.
-            mask (Optional[Tensor]): Mask of the observations.
-        Returns:
-            Tuple[Tensor, Distribution, Tensor, Tensor]: Predicted next observation, action distribution,
-                VQ loss and perplexity.
+        Factored out of `forward` so subclasses (``IMLAMIDM``) can reuse the exact quantizer /
+        action-decoder logic while swapping only the FDM call. Returns the quantized latent action, the
+        VQ loss, the perplexity, and the action distribution.
         """
-        if self.add_mask_to_observation and mask is not None:
-            observation = torch.cat([x, mask], dim=-3)
-        else:
-            observation = x
-
         current_observation = merge_tc(observation[:, :self.frame_stack])
 
         # Sample the future observations in an interval of 1 to future_obs_offset, if enabled.
         # If disabled, the future observations are the last frame_stack frames, k = future_obs_offset.
         if self.future_obs_sampling:
-            k = torch.randint(1, self.future_obs_offset, (x.shape[0],), device=x.device)
-            frame_idx = k[:, None] + torch.arange(self.frame_stack, device=x.device)
+            b = observation.shape[0]
+            k = torch.randint(1, self.future_obs_offset, (b,), device=observation.device)
+            frame_idx = k[:, None] + torch.arange(self.frame_stack, device=observation.device)
             future_observation = merge_tc(
-                observation[torch.arange(x.shape[0], device=x.device)[:, None], frame_idx]
+                observation[torch.arange(b, device=observation.device)[:, None], frame_idx]
             )
         else:
             future_observation = merge_tc(observation[:, -self.frame_stack:])
@@ -179,6 +171,30 @@ class SLAPOIDM(nn.Module):
 
         # Predict the action a_t given the quantized latent action.
         action_distribution = self.action_decoder(quantized_latent_action.detach())
+        return quantized_latent_action, vq_loss, perplexity, action_distribution
+
+    def forward(
+        self, x: Tensor, mask: Optional[Tensor] = None, object_mask: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Distribution, Tensor, Tensor]:
+        """
+        Forward pass.
+
+        Args:
+            x (Tensor): Sequence of observations from o_{t-frame_stack+1} ... o_{t+future_obs_offset}.
+            mask (Optional[Tensor]): Mask of the observations.
+            object_mask (Optional[Tensor]): Object mask; ignored here (MaskLAM/Foreground use only the
+                agent mask), accepted so the shared module can pass it unconditionally to any net.
+        Returns:
+            Tuple[Tensor, Distribution, Tensor, Tensor]: Predicted next observation, action distribution,
+                VQ loss and perplexity.
+        """
+        if self.add_mask_to_observation and mask is not None:
+            observation = torch.cat([x, mask], dim=-3)
+        else:
+            observation = x
+
+        current_observation = merge_tc(observation[:, :self.frame_stack])
+        quantized_latent_action, vq_loss, perplexity, action_distribution = self._encode_action(observation)
 
         # Predict the next observation o_{t+1} given the current observation.
         next_observation = self.decoder(current_observation, quantized_latent_action)
@@ -203,6 +219,133 @@ class SLAPOIDM(nn.Module):
         else:
             future_observation = merge_tc(observation[:, -self.frame_stack:])
         return self.encoder(torch.cat([current_observation, future_observation], dim=1))
+
+
+class IMLAMIDM(SLAPOIDM):
+    """IM-LAM IDM: MaskLAM's IDM with the FDM replaced by the directed interaction predictor.
+
+    Everything about the IDM (``self.encoder`` and the latent-action / quantizer / action-head path)
+    is inherited unchanged from :class:`SLAPOIDM`, so a MaskLAM Stage-1 checkpoint's ``net.encoder.*``
+    keys still load into Stage 2/3 (checkpoint contract). The only differences are:
+
+    - **The FDM is the interaction world model, rebuilt at ``c+2`` input channels** (RGB + agent mask +
+      object mask). ``super().__init__`` first builds the standard IDM and a *throwaway* FDM at the
+      IDM's channel count; this class then re-invokes the same ``world_model`` partial at ``c+2`` and
+      discards the throwaway. ``use_orthogonal_init`` is threaded into that rebuild explicitly, because
+      the ``net.world_model`` Hydra partial does not carry it and ``super().__init__``'s
+      ``apply(orthogonal_init)`` only reached the throwaway decoder.
+    - **The forward routes both masks**: the FDM consumes the ``c+2`` current frame stack plus the
+      current-frame (``frame_stack-1``) agent/object occupancy as attention / write-back signals.
+    """
+
+    def __init__(
+        self,
+        observation_space: spaces.Box,
+        action_space: spaces.Space,
+        channel_multiplier: int,
+        quantizer: Union[VectorQuantizerEMA, FiniteScalarQuantizer, IdentityQuantizer],
+        world_model,
+        code_dim: int,
+        num_latents: int,
+        use_orthogonal_init: bool = False,
+        future_obs_offset: int = 10,
+        frame_stack: int = 3,
+        add_mask_to_observation: bool = False,
+        future_obs_sampling: bool = False,
+        segmentation_net: Optional[SLAPOSegmentationNet] = None,
+        fdm_object_mask_input: bool = True,
+    ) -> None:
+        """Instantiate IMLAMIDM. Signature mirrors :class:`SLAPOIDM` plus ``fdm_object_mask_input``.
+
+        Args:
+            fdm_object_mask_input (bool): Documents the FDM asymmetry - the FDM (unlike the IDM) ingests
+                the object mask as an extra input channel. The interaction module is defined around it
+                (it routes the attention and the write-back gate), so there is no agent-only FDM variant:
+                the only supported value is True, and False raises rather than silently doing nothing.
+            (All other args: see :class:`SLAPOIDM`.)
+        """
+        if not fdm_object_mask_input:
+            raise ValueError(
+                "fdm_object_mask_input=False is not supported: the IM-LAM FDM is defined over the object "
+                "mask (it drives the interaction attention and the write-back gate). Leave it True or drop "
+                "the override."
+            )
+        super().__init__(
+            observation_space=observation_space,
+            action_space=action_space,
+            channel_multiplier=channel_multiplier,
+            quantizer=quantizer,
+            world_model=world_model,
+            code_dim=code_dim,
+            num_latents=num_latents,
+            use_orthogonal_init=use_orthogonal_init,
+            future_obs_offset=future_obs_offset,
+            frame_stack=frame_stack,
+            add_mask_to_observation=add_mask_to_observation,
+            future_obs_sampling=future_obs_sampling,
+            segmentation_net=segmentation_net,
+        )
+        self.fdm_object_mask_input = fdm_object_mask_input
+
+        # Replace the throwaway FDM with the interaction world model at c+2 (RGB + agent + object mask).
+        # use_orthogonal_init MUST be threaded in here: the partial does not carry it, and super()'s
+        # global apply(orthogonal_init) already ran over the (now discarded) throwaway decoder.
+        _, c, h, w = observation_space.shape
+        self.decoder = world_model(
+            (frame_stack * (c + 2), h, w),
+            output_channels=c,
+            condition_dim=code_dim,
+            use_orthogonal_init=use_orthogonal_init,
+        )
+
+    def forward(
+        self,
+        x: Tensor,
+        mask: Optional[Tensor] = None,
+        object_mask: Optional[Tensor] = None,
+        agent_ctx_mode: str = "normal",
+        return_attn: bool = False,
+    ):
+        """Forward pass.
+
+        Args:
+            x (Tensor): Sequence of observations ``(B, T, c, H, W)``.
+            mask (Optional[Tensor]): Agent mask ``(B, T, 1, H, W)`` (required).
+            object_mask (Optional[Tensor]): Object mask ``(B, T, 1, H, W)`` (required).
+            agent_ctx_mode (str): Eval-time agent-path substitution passed to the interaction module.
+            return_attn (bool): If True, append the object->agent attention maps as a 5th return value.
+        Returns:
+            The MaskLAM 4-tuple ``(next_observation, action_distribution, vq_loss, perplexity)``, plus a
+            trailing attention tensor when ``return_attn`` is True.
+        """
+        if mask is None or object_mask is None:
+            raise ValueError(
+                "IMLAMIDM.forward requires both an agent mask and an object_mask (the FDM is defined "
+                "over agent+object masks). Enable dataset.with_object_mask and route it through the module."
+            )
+
+        # IDM path: identical to MaskLAM (agent-mask-only, c+1) - reuse the shared quantizer/action logic.
+        idm_observation = torch.cat([x, mask], dim=-3) if self.add_mask_to_observation else x
+        quantized_latent_action, vq_loss, perplexity, action_distribution = self._encode_action(idm_observation)
+
+        # FDM path: RGB + agent + object mask (c+2); current-frame (t = frame_stack-1) occupancy routes
+        # the interaction attention and the write-back gate.
+        fdm_observation = torch.cat([x, mask, object_mask], dim=-3)
+        fdm_current = merge_tc(fdm_observation[:, :self.frame_stack])
+        agent_mask_t = mask[:, self.frame_stack - 1]
+        object_mask_t = object_mask[:, self.frame_stack - 1]
+        fdm_out = self.decoder(
+            fdm_current,
+            quantized_latent_action,
+            agent_mask_t,
+            object_mask_t,
+            agent_ctx_mode=agent_ctx_mode,
+            return_attn=return_attn,
+        )
+        if return_attn:
+            next_observation, attn = fdm_out
+            return next_observation, action_distribution, vq_loss, perplexity, attn
+        return fdm_out, action_distribution, vq_loss, perplexity
 
 
 class SLAPOLatentPolicy(nn.Module):

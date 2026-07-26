@@ -341,6 +341,16 @@ class SLAPOIDMModule(SupervisedLightningModule):
         miou = intersection / (union + 1e-6)
         return miou.mean()
 
+    def _nonfinite_loss_flag(self, loss: Tensor) -> Tensor:
+        """Divergence detector: 1.0 if the loss is NaN/Inf, else 0.0.
+
+        Written as a pure tensor op (not a Python ``if``) so it stays inside the compiled ``training_step``
+        graph: no permanent graph break and no mid-graph GPU->CPU sync. Logged every step so a blow-up is
+        visible even when ``max_grad_norm`` is null (DMW default); the failing step's ``beta``/``proj``
+        norms sit in the same ``step_dict``, making the step diagnosable rather than a silent NaN cascade.
+        """
+        return (~torch.isfinite(loss)).float()
+
     @torch.compiler.disable()
     def _dual_loss_grad_diagnostics(self, loss_agent: Tensor, loss_object: Tensor) -> tuple[Tensor, Tensor]:
         """Periodic diagnostic for ``log_dual_loss_grad_every``: per-term gradient norms w.r.t. the shared decoder.
@@ -424,7 +434,11 @@ class SLAPOIDMModule(SupervisedLightningModule):
         if self.mask_observation and agent_mask is not None:
             batch["observation"] = batch["observation"] * input_mask
 
-        next_observation, action_distribution, vq_loss, perplexity = self.net(batch["observation"], input_mask)
+        # Pass the object mask through unconditionally: SLAPOIDM.forward accepts and ignores it (so
+        # MaskLAM/Foreground are unaffected), while IMLAMIDM's FDM consumes it.
+        next_observation, action_distribution, vq_loss, perplexity = self.net(
+            batch["observation"], input_mask, object_mask=object_mask
+        )
 
         loss_agent = loss_object = None
         grad_norm_agent = grad_norm_object = None
@@ -485,6 +499,16 @@ class SLAPOIDMModule(SupervisedLightningModule):
         if grad_norm_agent is not None:
             step_dict["reconstruction_loss_agent_grad_norm"] = grad_norm_agent
             step_dict["reconstruction_loss_object_grad_norm"] = grad_norm_object
+
+        # IM-LAM instrumentation (logged from step 0): per-head mask-bias strength and write-back
+        # projection norms. Guarded by the method's presence so stock MaskLAM/Foreground nets are
+        # untouched. Cheap tensor reads (no .item(), no autograd) -> compile-safe, no @disable needed.
+        if hasattr(self.net, "interaction_diagnostics"):
+            for key, value in self.net.interaction_diagnostics().items():
+                step_dict[key] = value
+
+        # Divergence detector (all nets): flag a NaN/Inf loss so a blow-up is logged rather than silent.
+        step_dict["loss_nonfinite"] = self._nonfinite_loss_flag(loss)
 
         # Log predicted next observation vs ground truth on the last batch.
         if batch_idx == batch_len - 1 and self.debug_transform is not None:

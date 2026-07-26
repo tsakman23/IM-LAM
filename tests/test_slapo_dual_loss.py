@@ -130,7 +130,7 @@ class _FakeWorldModelNet(nn.Module):
         self.frame_stack = frame_stack
         self.segmentation_net = None
 
-    def forward(self, observation, mask):
+    def forward(self, observation, mask, object_mask=None):
         b = observation.shape[0]
         next_observation = torch.zeros(b, *IMG_SHAPE)
         action_distribution = Normal(torch.zeros(b, ACTION_DIM), torch.ones(b, ACTION_DIM))
@@ -251,7 +251,7 @@ class _FakeWorldModelNetWithDecoder(nn.Module):
         self.segmentation_net = None
         self.decoder = _Decoder()
 
-    def forward(self, observation, mask):
+    def forward(self, observation, mask, object_mask=None):
         b = observation.shape[0]
         next_observation = self.decoder.scale * torch.ones(b, *IMG_SHAPE)
         action_distribution = Normal(torch.zeros(b, ACTION_DIM), torch.ones(b, ACTION_DIM))

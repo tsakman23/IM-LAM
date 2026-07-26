@@ -347,6 +347,30 @@ class IMLAMIDM(SLAPOIDM):
             return next_observation, action_distribution, vq_loss, perplexity, attn
         return fdm_out, action_distribution, vq_loss, perplexity
 
+    def interaction_diagnostics(self) -> dict:
+        """Scalar health signals for the interaction FDM, surfaced by the module from step 0.
+
+        - ``beta_msa_a`` / ``beta_msa_o``: mean per-head mask-bias strength for the agent/object entity
+          extractors. Should stay away from 0 - near-0 means the mask signal is being ignored.
+        - ``beta_msa_a_min`` / ``beta_msa_o_min``: the *minimum* over heads. The N3 mask-collapse guard is
+          per-head in spirit - a single head at 0 among five healthy ones would hide in the mean, so the
+          min surfaces a collapsed head directly.
+        - ``proj_a_norm`` / ``proj_o_norm``: write-back projection weight norms. Start at 0 (zero-init)
+          and must grow; a norm stuck near 0 means the agent/object branch (and its ``z_t`` path) was
+          made irrelevant. All detached, so this never perturbs the training graph.
+        """
+        interaction = self.decoder.interaction
+        beta_a = interaction.msa_agent.beta.detach()
+        beta_o = interaction.msa_object.beta.detach()
+        return {
+            "beta_msa_a": beta_a.mean(),
+            "beta_msa_a_min": beta_a.min(),
+            "beta_msa_o": beta_o.mean(),
+            "beta_msa_o_min": beta_o.min(),
+            "proj_a_norm": interaction.proj_a.weight.detach().norm(),
+            "proj_o_norm": interaction.proj_o.weight.detach().norm(),
+        }
+
 
 class SLAPOLatentPolicy(nn.Module):
     """Latent policy class that encapsulates all NNs to train the latent policy in SLAPO."""

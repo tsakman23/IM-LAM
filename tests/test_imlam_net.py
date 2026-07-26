@@ -174,6 +174,31 @@ class IMLAMIDMTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             net(self.x, self.agent_mask)
 
+    def test_interaction_diagnostics_report_init_invariants(self):
+        # The scalars the module logs from step 0: beta starts at 2.0 per head (mean AND min, so a later
+        # single-head collapse is visible), the zero-init write-back has zero-norm projections, and every
+        # value is detached (never perturbs the training graph).
+        diag = _imlam().interaction_diagnostics()
+        self.assertEqual(
+            set(diag),
+            {"beta_msa_a", "beta_msa_a_min", "beta_msa_o", "beta_msa_o_min", "proj_a_norm", "proj_o_norm"},
+        )
+        for key in ("beta_msa_a", "beta_msa_a_min", "beta_msa_o", "beta_msa_o_min"):
+            self.assertAlmostEqual(diag[key].item(), 2.0, places=5)
+        self.assertEqual(diag["proj_a_norm"].item(), 0.0)
+        self.assertEqual(diag["proj_o_norm"].item(), 0.0)
+        self.assertFalse(any(v.requires_grad for v in diag.values()))
+
+    def test_beta_min_exposes_a_collapsed_head(self):
+        # A single head driven to 0 must show in the min while the mean stays misleadingly healthy - the
+        # per-head spirit of the N3 mask-collapse guard.
+        net = _imlam()
+        with torch.no_grad():
+            net.decoder.interaction.msa_agent.beta[0] = 0.0
+        diag = net.interaction_diagnostics()
+        self.assertEqual(diag["beta_msa_a_min"].item(), 0.0)
+        self.assertGreater(diag["beta_msa_a"].item(), 1.0)  # mean still looks fine
+
     def test_disabling_fdm_object_mask_input_raises(self):
         # The FDM is architecturally defined around the object mask (it routes the interaction attention
         # and the write-back gate), so there is no agent-only FDM variant. fdm_object_mask_input=False is

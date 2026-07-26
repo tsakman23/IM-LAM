@@ -614,10 +614,17 @@ class SupervisedTrainer(LightningTrainer):
             self.fabric.call("before_backward", **rename_key(locals(), "self", "trainer"))
             self.fabric.backward(step_dict["loss"])
 
+            # Log the total grad norm every step as a divergence detector. Clip to max_grad_norm when one
+            # is configured; otherwise just measure it (get_total_norm does not mutate gradients), so runs
+            # with max_grad_norm=null (the DMW default) still surface a gradient blow-up instead of hiding
+            # it - and a non-finite norm cannot poison the grads via a NaN clip coefficient.
             if model.max_grad_norm is not None:
                 self.fabric.call("before_clip_grad", **rename_key(locals(), "self", "trainer"))
                 total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), model.max_grad_norm)
-                self._log({"train/total_grad_norm": total_grad_norm})
+            else:
+                grads = [p.grad for p in model.parameters() if p.grad is not None]
+                total_grad_norm = torch.nn.utils.get_total_norm(grads) if grads else torch.tensor(0.0)
+            self._log({"train/total_grad_norm": total_grad_norm})
 
             self.fabric.call("before_optimizer_step", **rename_key(locals(), "self", "trainer"))
             optimizer.step()

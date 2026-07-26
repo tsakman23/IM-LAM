@@ -127,5 +127,20 @@ class MaskBiasedAttentionTest(unittest.TestCase):
         self.assertTrue(torch.allclose(attn.beta.detach(), torch.full((4,), 2.0)))
 
 
+    def test_use_mask_bias_false_has_no_beta(self):
+        # Plain (unbiased) cross-attention should carry no dead beta parameter.
+        attn = MaskBiasedAttention(32, 4, use_mask_bias=False)
+        self.assertIsNone(attn.beta)
+        self.assertNotIn("beta", dict(attn.named_parameters()))
+        q, k, v = torch.randn(2, 5, 32), torch.randn(2, 7, 32), torch.randn(2, 7, 32)
+        self.assertEqual(tuple(attn(q, k, v).shape), (2, 5, 32))  # unbiased forward still works
+
+    def test_use_mask_bias_false_rejects_mask_bias(self):
+        attn = MaskBiasedAttention(32, 4, use_mask_bias=False)
+        q, k, v = torch.randn(2, 5, 32), torch.randn(2, 7, 32), torch.randn(2, 7, 32)
+        with self.assertRaises(ValueError):
+            attn(q, k, v, mask_bias=torch.zeros(2, 7))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,8 @@ class InteractionWorldModel(nn.Module):
         encoder_channels: Sequence[int] = (16, 32, 32),
         encoder_num_res_blocks: int = 2,
         num_heads: int = 6,
+        mlp_ratio: int = 4,
+        dilate_iters: int = 1,
         use_orthogonal_init: bool = False,
         direct_z_to_object: bool = False,
     ) -> None:
@@ -50,6 +52,9 @@ class InteractionWorldModel(nn.Module):
             encoder_channels (Sequence[int], optional): Per-block IMPALA channel counts.
             encoder_num_res_blocks (int, optional): Residual blocks per IMPALA block; also threaded into ``F_A``.
             num_heads (int, optional): Attention heads in the interaction module. Must divide the bottleneck width.
+            mlp_ratio (int, optional): Hidden-width multiplier for ``F_O``'s position-wise FFN.
+            dilate_iters (int, optional): Times the write-back dilates the pooled masks (>=1; the proposal's
+                "applied once or twice" - raise for a faster-moving object).
             use_orthogonal_init (bool, optional): Orthogonally initialize submodules, then re-zero the write-back.
             direct_z_to_object (bool, optional): Matched-ablation switch (feeds ``z_t`` to the object branch).
         """
@@ -76,6 +81,8 @@ class InteractionWorldModel(nn.Module):
             num_tokens=h_prime * w_prime,
             num_heads=num_heads,
             code_dim=condition_dim,
+            mlp_ratio=mlp_ratio,
+            dilate_iters=dilate_iters,
             direct_z_to_object=direct_z_to_object,
             num_res_blocks=encoder_num_res_blocks,
         )

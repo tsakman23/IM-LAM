@@ -13,6 +13,7 @@ import sys
 import unittest
 
 import torch
+import torch.nn.functional as F
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -109,6 +110,32 @@ class InteractionWorldModelTest(unittest.TestCase):
         # The interaction module needs a square bottleneck; a non-square input would break it.
         with self.assertRaises((ValueError, AssertionError)):
             _model(shape=(15, 32, 64))
+
+    def test_dilate_iters_and_mlp_ratio_are_config_reachable(self):
+        # The proposal's "dilation applied once or twice" and F_O's FFN width must be reachable from
+        # the FDM constructor (i.e. from Hydra), not just from InteractionModule directly.
+        model = _model(dilate_iters=2, mlp_ratio=2)
+        self.assertEqual(model.interaction.dilate_iters, 2)
+        self.assertEqual(model.interaction.ffn[0].out_features, model.final_encoder_shape[0] * 2)
+
+    def test_fdm_trains_one_step_and_opens_the_write_back(self):
+        # End-to-end FDM smoke: the full encoder -> interaction -> decoder path takes a masked-region
+        # reconstruction loss, backprops, and steps without NaNs, and the zero-init write-back actually
+        # opens off zero (the graceful-onboarding residual starts contributing once trained).
+        self.assertEqual(self.model.interaction.proj_a.weight.abs().sum().item(), 0.0)  # closed at init
+        target = (torch.rand(self.b, 3, 32, 32) - 0.5).detach()  # in [-0.5, 0.5], matching tanh/2
+        union = torch.clamp(self.m_a + self.m_o, max=1.0)  # agent-or-object region, as the union loss selects
+        opt = torch.optim.AdamW(self.model.parameters(), lr=1e-2)
+        loss = None
+        for _ in range(3):
+            opt.zero_grad()
+            y = self.model(self.x, self.z, self.m_a, self.m_o)
+            loss = (union * (y - target).pow(2)).sum() / (union.sum() + 1e-8)
+            loss.backward()
+            opt.step()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(all(torch.isfinite(p).all() for p in self.model.parameters()))
+        self.assertGreater(self.model.interaction.proj_a.weight.abs().sum().item(), 0.0)  # opened off zero
 
 
 if __name__ == "__main__":

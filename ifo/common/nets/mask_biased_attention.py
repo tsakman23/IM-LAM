@@ -26,13 +26,16 @@ class MaskBiasedAttention(nn.Module):
     attention logits are a known instability source.
     """
 
-    def __init__(self, dim: int, num_heads: int, proj_bias: bool = True) -> None:
+    def __init__(self, dim: int, num_heads: int, proj_bias: bool = True, use_mask_bias: bool = True) -> None:
         """Instantiate mask-biased attention.
 
         Args:
             dim (int): Model / token width. Must be divisible by ``num_heads``.
             num_heads (int): Number of attention heads.
             proj_bias (bool, optional): Whether the Q/K/V/output projections use bias.
+            use_mask_bias (bool, optional): Whether to create the learnable per-head bias scale
+                ``beta``. Set False for plain (unbiased) cross-attention that is always called with
+                ``mask_bias=None``, so no dead ``beta`` parameter sits in the optimizer / weight decay.
         """
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} must be divisible by num_heads {num_heads}."
@@ -46,8 +49,9 @@ class MaskBiasedAttention(nn.Module):
         self.v_proj = nn.Linear(dim, dim, bias=proj_bias)
         self.out_proj = nn.Linear(dim, dim, bias=proj_bias)
 
-        # Learnable per-head bias scale, initialized to 2.0 (proposal S5.5 / A.2 N3).
-        self.beta = nn.Parameter(torch.full((num_heads,), 2.0))
+        # Learnable per-head bias scale, initialized to 2.0 (proposal S5.5 / A.2 N3). None when the
+        # instance is used only for unbiased attention, so it carries no unused parameter.
+        self.beta = nn.Parameter(torch.full((num_heads,), 2.0)) if use_mask_bias else None
 
     def _split_heads(self, x: Tensor) -> Tensor:
         """(B, N, dim) -> (B, num_heads, N, head_dim)."""
@@ -87,6 +91,8 @@ class MaskBiasedAttention(nn.Module):
 
         scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # (B, H, Nq, Nk)
         if mask_bias is not None:
+            if self.beta is None:
+                raise ValueError("mask_bias was provided but this module was built with use_mask_bias=False.")
             # beta_h * W_j, broadcast over batch and queries.
             bias = self.beta.reshape(1, self.num_heads, 1, 1) * mask_bias.reshape(b, 1, 1, nk)
             scores = scores + bias

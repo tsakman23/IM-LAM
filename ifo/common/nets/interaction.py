@@ -120,6 +120,11 @@ def pool_mask_occupancy(mask: Tensor, grid_hw: Union[int, Tuple[int, int]]) -> T
     b, c, h, w = mask.shape
     if c != 1:
         raise ValueError(f"expected a single-channel mask, got {c} channels.")
+    # Guard against a raw {0,255} mask bypassing ProcessMask: occupancy would then exceed 1 and beta*W
+    # would become a hard (~510) gate - exactly the regime the soft bias avoids. ProcessMask makes this
+    # redundant in the pipeline; it is cheap insurance for standalone/eval use.
+    if mask.max() > 1:
+        raise ValueError("mask must be binary in {0, 1}; got values > 1 (raw {0,255} mask? run ProcessMask first).")
     gh, gw = (grid_hw, grid_hw) if isinstance(grid_hw, int) else grid_hw
     if h % gh != 0 or w % gw != 0:
         raise ValueError(f"input {h}x{w} not divisible by bottleneck grid {gh}x{gw}.")
@@ -261,9 +266,9 @@ class InteractionModule(nn.Module):
         self.norm_extract = nn.LayerNorm(dim)  # extraction Q/K (shared by both entity heads)
         self.f_a = AgentDynamics(dim, num_tokens, code_dim, num_res_blocks=num_res_blocks)
         # F_O: the genuinely cross-attentive op (object queries attend to agent keys/values), plus a
-        # position-wise FFN, in the standard pre-norm transformer arrangement. No mask bias here - the
-        # keys are agent tokens by construction.
-        self.cross_attn = MaskBiasedAttention(dim, num_heads)
+        # position-wise FFN, in the standard pre-norm transformer arrangement. No mask bias here (keys
+        # are agent tokens by construction), so use_mask_bias=False - no dead beta parameter.
+        self.cross_attn = MaskBiasedAttention(dim, num_heads, use_mask_bias=False)
         self.norm_obj = nn.LayerNorm(dim)    # F_O: object query stream
         self.norm_ctx = nn.LayerNorm(dim)    # F_O: agent K context (keys only; values stay unnormalized)
         self.norm_ffn = nn.LayerNorm(dim)    # F_O: pre-norm on the FFN sublayer
@@ -378,6 +383,11 @@ class InteractionModule(nn.Module):
         elif agent_ctx_mode == "no_transition":
             a2, a2_temporal = a_t, "cur"
         elif agent_ctx_mode == "shuffled":
+            if a_hat.shape[0] < 2:
+                raise ValueError(
+                    "agent_ctx_mode='shuffled' needs batch size >= 2: at B=1 the batch roll is the "
+                    "identity, so R_shuffled would silently evaluate to 1.0 ('no dependence')."
+                )
             # Roll by 1 along the batch: a deterministic derangement (no sample keeps its own
             # predicted context), unlike a random permutation which can leave fixed points.
             a2, a2_temporal = torch.roll(a_hat, shifts=1, dims=0), "pred"
@@ -387,6 +397,7 @@ class InteractionModule(nn.Module):
             )
 
         query = self.embeddings.tag(self.norm_obj(o_t), temporal="cur")  # \tilde{O}_t (query pre-normed)
+        z_tokens = None
         if self.direct_z_to_object:
             if z is None:
                 raise ValueError("direct_z_to_object=True requires a latent action z.")
@@ -408,6 +419,11 @@ class InteractionModule(nn.Module):
         cross = self.cross_attn(query, key, value, mask_bias=None, return_attn=return_attn)
         context, attn = cross if return_attn else (cross, None)
         h = o_t + context                       # attention residual on the untagged object content
+        if z_tokens is not None:
+            # Matched ablation: z must also reach o_hat's *content*, not merely reweight the softmax over
+            # agent values (query-only injection has no content path and would handicap the ablation, so a
+            # tie could wrongly read as "the ablation could not use z" rather than "directedness doesn't matter").
+            h = h + z_tokens
         o_hat = h + self.ffn(self.norm_ffn(h))  # pre-norm position-wise FFN residual
         return (o_hat, attn) if return_attn else o_hat
 

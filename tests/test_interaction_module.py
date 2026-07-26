@@ -143,6 +143,12 @@ class PoolMaskOccupancyTest(unittest.TestCase):
         with self.assertRaises((AssertionError, ValueError)):
             pool_mask_occupancy(torch.zeros(1, 1, 5, 5), 2)
 
+    def test_rejects_non_binary_mask(self):
+        # A raw {0,255} mask bypassing ProcessMask would drive occupancy > 1, making beta*W a hard
+        # ~510 gate - exactly the regime the soft bias avoids.
+        with self.assertRaises(ValueError):
+            pool_mask_occupancy(torch.full((1, 1, 4, 4), 255.0), 2)
+
 
 class EntityExtractionTest(unittest.TestCase):
     def setUp(self):
@@ -333,6 +339,32 @@ class ObjectDynamicsTest(unittest.TestCase):
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             out = self.module.object_dynamics(self.o_t, self.a_t, self.a_hat)
         self.assertTrue(torch.isfinite(out).all())
+
+    def test_shuffled_requires_batch_size_ge_2(self):
+        # At B=1 the batch roll is the identity, so R_shuffled would silently read 1.0 ("no dependence").
+        with self.assertRaises(ValueError):
+            self.module.object_dynamics(
+                self.o_t[:1], self.a_t[:1], self.a_hat[:1], agent_ctx_mode="shuffled"
+            )
+
+    def test_direct_z_reaches_content_not_only_attention(self):
+        # z must reach o_hat's content, not merely reweight the softmax over agent values. Zero
+        # cross_attn.out_proj so the attention path contributes nothing; any remaining z-dependence is
+        # the direct content path (a query-only injection would leave o_hat z-independent here).
+        mod = InteractionModule(
+            self.dim, num_tokens=self.n, num_heads=self.heads, code_dim=self.code,
+            num_res_blocks=2, direct_z_to_object=True,
+        )
+        with torch.no_grad():
+            mod.cross_attn.out_proj.weight.zero_()
+            mod.cross_attn.out_proj.bias.zero_()
+        o1 = mod.object_dynamics(self.o_t, self.a_t, self.a_hat, z=self.z)
+        o2 = mod.object_dynamics(self.o_t, self.a_t, self.a_hat, z=torch.randn(self.b, self.code))
+        self.assertFalse(torch.allclose(o1, o2))
+
+    def test_cross_attn_carries_no_mask_bias_parameter(self):
+        # F_O's cross-attention is always unbiased (mask_bias=None), so it holds no beta parameter.
+        self.assertIsNone(self.module.cross_attn.beta)
 
 
 class InteractionNormalizationTest(unittest.TestCase):

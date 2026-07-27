@@ -8,6 +8,11 @@ trainer:
 env:
   name: Meta-World/masked-MT1-button-press-v3
 
+dataset:
+  # See lapo_bc_dmw_stage_1.yaml - same rationale, kept consistent across stages 1-3.
+  dataset_path: EpicPinkPenguin/visual_distracting_metaworld
+  with_object_mask: false
+
 module:
   batch_size: 128
   optimizer:

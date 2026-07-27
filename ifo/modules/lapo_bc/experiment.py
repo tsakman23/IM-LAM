@@ -1,13 +1,9 @@
-import os
-
 import hydra
 import torch
 from omegaconf import DictConfig
 
-from ifo.common.utils.hydra import hydra_main_multistage
 from ifo.common.utils.utility import (
     Conditional,
-    add_legacy_features_to_vector_wrapper,
     get_latest_checkpoint,
     requires_grad,
 )
@@ -82,14 +78,7 @@ class LAPOBCExperiment(LAPOExperiment):
         val_env.close()
 
 
-@hydra_main_multistage(
-    version_base=None, config_path=f"{os.getcwd()}/experiments/configs", config_name=LAPOBCExperiment.config
-)
-def main(cfg: DictConfig, stage: str):
-    experiment = LAPOBCExperiment()
-    add_legacy_features_to_vector_wrapper()
-    getattr(experiment, stage)(cfg)
-
-
-if __name__ == "__main__":
-    main()
+# The multi-stage pipeline is driven in-process by experiments/run_lapo_bc.py (one process,
+# one W&B run). The former subprocess-per-stage entry point has been removed. The plain
+# (non-BC) LAPOExperiment this class subclasses still keeps its own subprocess entry point,
+# used by experiments/run_lapo.py.

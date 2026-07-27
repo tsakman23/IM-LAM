@@ -189,6 +189,27 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
 - Per-term losses are logged separately to W&B - `reconstruction_loss_agent` / `reconstruction_loss_object`
   - alongside the combined `reconstruction_loss`, so both terms are visible independently during training.
 
+### 5d. LAPO (baseline)
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_lapo_bc.py \
+  run_id=lapo_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=lapo_reprod logger.notes="LAPO <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn lapo_bc_dmw_stage_1 \
+  --stage stage_2 -cn lapo_bc_dmw_stage_2 \
+  --stage stage_3 -cn lapo_bc_dmw_stage_3
+```
+- The unmasked baseline MaskLAM itself compares against - no agent or object mask anywhere in
+  training. Same in-process, one-run pipeline as 5a-5c (`experiments/run_lapo_bc.py` mirrors
+  `run_slapo.py`); the former subprocess-per-stage entry point is gone for this pipeline too.
+- Defaults to the authors' `EpicPinkPenguin` release, pinned in `lapo_bc_dmw_stage_1/2/3.yaml`
+  (`with_object_mask` stays false always - LAPO never reads it). Stage it with
+  `--repo EpicPinkPenguin/...` in Section 2, same as 5a.
+- MaskLAM's own paper doesn't report `sweep-into-v3` or `handle-pull-v3` (not in their MT10
+  table), so for those two override `dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld`
+  on the command line - stage that repo instead (Section 2). Every other task uses the default above.
+
 ---
 
 ### Visualize MaskLAM vs Foreground-MaskLAM reconstruction

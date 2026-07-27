@@ -7,7 +7,7 @@ defaults:
 stage_run_id: ${run_id}-2
 
 logger:
-  project: lapo
+  project: masklam
   job_type: latent_policy
   tags: [lapo, impala_encoder, stage_2]
 

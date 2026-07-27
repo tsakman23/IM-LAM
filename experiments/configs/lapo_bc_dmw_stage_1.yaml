@@ -8,6 +8,15 @@ trainer:
 env:
   name: Meta-World/masked-MT1-button-press-v3
 
+dataset:
+  # LAPO uses no mask at all (agent or object), so with_object_mask stays false always;
+  # declared here (not just left to the get_dataset default) so dataset.dataset_path is
+  # overridable from the CLI without a "+" prefix, matching slapo_dmw_stage_1.yaml.
+  # Authors' release by default; override to tsakman23/visual_masked_distracting_metaworld
+  # for tasks they don't provide (e.g. sweep-into-v3, handle-pull-v3).
+  dataset_path: EpicPinkPenguin/visual_distracting_metaworld
+  with_object_mask: false
+
 module:
   batch_size: 128
   optimizer:

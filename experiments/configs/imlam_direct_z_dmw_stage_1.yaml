@@ -1,0 +1,26 @@
+# IM-LAM matched ablation - Stage 1 (direct z_t to the object branch).
+#
+# Identical to imlam_dmw_stage_1 (union) except the object branch ALSO receives z_t
+# directly (direct_z_to_object=true), which breaks the directed embodiment->object path
+# (proposal Eq. objectdyn: the object should read the predicted agent transition, not z_t
+# itself). This is the capacity-matched control - z_t reaches the object through the same
+# extra parameters either way - so any object-prediction gap between this and
+# imlam_dmw_stage_1 isolates the value of ROUTING object dynamics through the agent
+# transition, not merely of the added capacity.
+#
+# For a dual-loss ablation, base this on imlam_dual_dmw_stage_1 instead (swap the default)
+# and keep the direct_z_to_object override.
+defaults:
+  - imlam_dmw_stage_1
+  - _self_
+
+env:
+  # The matched ablation is only informative on LARGE-object tasks (proposal S6.2). On push the object
+  # spans ~0.2 bottleneck cells, so the object branch is nearly inert and direct-z vs routed-z would tie
+  # uninformatively - hence override the inherited push default. Run the union baseline
+  # (imlam_dmw_stage_1) on the SAME task, and repeat on the second large-object task (e.g. door-open).
+  name: Meta-World/masked-MT1-handle-pull-v3
+
+net:
+  world_model:
+    direct_z_to_object: true

@@ -1,0 +1,48 @@
+# IM-LAM (Interaction-Masked Latent Action Model) - Stage 1, union loss.
+#
+# Same Stage-1 objective as Foreground-MaskLAM (the FDM reconstruction loss is gated by
+# the UNION of the agent and manipulated-object masks, object_mask_loss=true), but the
+# FDM itself is the directed interaction predictor: IMLAMIDM replaces SLAPOIDM and
+# InteractionWorldModel replaces ImpalaWorldModel. IMLAMIDM routes the object mask to an
+# embodiment->object predictor at the 16x16x192 bottleneck; the IDM encoder is byte-
+# identical to MaskLAM's, so stages 2/3 reuse foreground_masklam_dmw_stage_{2,3}.yaml.
+#
+# Requires object masks AND object_state (with_object_state feeds the Phase-8 object-
+# dynamics probe), from the regenerated object-mask repo
+# (tsakman23/visual_masked_distracting_metaworld) - the MaskLAM authors' release is agent-
+# mask only, so only tasks I have regenerated are available.
+defaults:
+  - slapo_dmw_stage_1
+  - _self_
+
+env:
+  name: Meta-World/masked-MT1-push-v3
+
+net:
+  # Swap the net and the FDM; every other net kwarg (channel_multiplier, use_orthogonal_init,
+  # add_mask_to_observation, future_obs_offset/frame_stack, quantizer, code_dim, num_latents)
+  # is inherited from slapo_default_stage_1 so the IDM/encoder stays identical to MaskLAM's.
+  _target_: ifo.modules.slapo.nets.IMLAMIDM
+  world_model:
+    _target_: ifo.common.nets.interaction_world_model.InteractionWorldModel
+    # channel_multiplier: 6 / encoder_channels: [16, 32, 32] / encoder_num_res_blocks: 2 are
+    # inherited and stay identical to MaskLAM's FDM encoder (192-wide 16x16 bottleneck).
+    # num_heads must divide that width (192 / 6 = 32).
+    num_heads: 6
+
+module:
+  # Union loss over agent U object (same as Foreground-MaskLAM). object_mask_input stays
+  # false: z_t must remain an embodiment action (proposal S5.4) and stages 2/3 reuse the
+  # agent-only encoder - the FDM still receives the object mask through IMLAMIDM.
+  object_mask_loss: true
+  object_mask_input: false
+
+dataset:
+  # Pull observation_distracted + agent mask + object_mask + object_state from the regenerated repo.
+  with_object_mask: true
+  with_object_state: true
+  dataset_path: tsakman23/visual_masked_distracting_metaworld
+  # Persistent cache matching scripts/download_dataset.py's default (./datasets/slapo/<env>),
+  # so a pre-fetched split cache-hits at train time instead of using the base config's
+  # ephemeral /tmp path. Interpolates env.name so it tracks the task if overridden.
+  cache_dir: ./datasets/slapo/${env.name}

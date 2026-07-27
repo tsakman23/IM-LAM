@@ -26,24 +26,9 @@ class SLAPOExperiment(Experiment):
         "stage_3": "slapo_default_stage_3",
     }
 
-    # Shared Fabric + W&B run injected by the in-process orchestrator (experiments/run_slapo.py).
-    # When set, every stage reuses one Fabric and logs to one W&B run; per-stage metric
-    # prefixing / 0-based step axes are handled via each stage's trainer.log_prefix override.
-    _shared_fabric = None
-    _shared_run = None
-
-    def _configure_fabric(self, cfg: DictConfig):
-        """Reuse the orchestrator's shared Fabric when present, seeding per stage."""
-        if self._shared_fabric is not None:
-            self._configure_seed(cfg, self._shared_fabric)
-            return self._shared_fabric
-        return super()._configure_fabric(cfg)
-
-    def _configure_wandb_logging(self, fabric, cfg: DictConfig) -> None:
-        """Skip per-stage W&B init when the orchestrator already opened the shared run."""
-        if self._shared_run is not None:
-            return
-        super()._configure_wandb_logging(fabric, cfg)
+    # Shared-Fabric/shared-W&B-run injection (experiments/run_slapo.py) and per-stage metric
+    # prefixing / 0-based step axes (each stage's trainer.log_prefix override) are handled by
+    # the base Experiment class and each stage's trainer config respectively.
 
     def stage_0(self, cfg: DictConfig) -> None:
         """Train UNet-based binary segmentation model on ground-truth masks."""

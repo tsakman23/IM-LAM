@@ -34,6 +34,16 @@ class Experiment(ABC):
     stages = ["stage_1"]
     config = {"stage_1": ""}
 
+    # Shared Fabric + W&B run, optionally injected by an in-process, multi-stage orchestrator
+    # (e.g. experiments/run_slapo.py, experiments/run_lapo_bc.py) so every stage reuses one
+    # Fabric and logs to one W&B run instead of each stage opening its own. Left as None (the
+    # default below) for any experiment still invoked per-stage via ifo.common.runner.Runner's
+    # subprocess mechanism (e.g. experiments/run_lapo.py) - each subprocess then gets a fresh
+    # Experiment instance with these unset, so _configure_fabric/_configure_wandb_logging fall
+    # through to the plain, un-shared behavior unchanged.
+    _shared_fabric = None
+    _shared_run = None
+
     @rank_zero_only
     def _print_config(self, cfg: DictConfig) -> None:
         """Print the experiment configuration.
@@ -50,10 +60,15 @@ class Experiment(ABC):
     def _configure_wandb_logging(self, fabric: Fabric, cfg: DictConfig) -> None:
         """Configure Weights & Biases logging for fabric.
 
+        Skips per-stage W&B init when an in-process orchestrator has already opened a
+        shared run (``self._shared_run`` set) - see the class-level docstring above.
+
         Args:
             fabric (Fabric): Fabric instance.
             cfg (DictConfig): Experiment configuration.
         """
+        if self._shared_run is not None:
+            return
         config = OmegaConf.to_container(cfg, resolve=True)
         assert isinstance(config, dict)
         logger_conf = config["logger"]
@@ -69,7 +84,9 @@ class Experiment(ABC):
     def _configure_fabric(self, cfg: DictConfig) -> Fabric:
         """Configure Fabric.
 
-        Configures Fabric, sets the CUDA backend, and the random seed.
+        Reuses an in-process orchestrator's shared Fabric when present (``self._shared_fabric``
+        set), only (re-)seeding per stage; otherwise configures CUDA backend, random seed, and
+        a fresh Fabric as usual - see the class-level docstring above.
 
         Args:
             cfg (DictConfig): Experiment configuration.
@@ -77,6 +94,10 @@ class Experiment(ABC):
         Returns:
             Fabric: Configured Fabric instance.
         """
+        if self._shared_fabric is not None:
+            self._configure_seed(cfg, self._shared_fabric)
+            return self._shared_fabric
+
         # Configure CUDA backend.
         self._configure_cuda_backend()
 

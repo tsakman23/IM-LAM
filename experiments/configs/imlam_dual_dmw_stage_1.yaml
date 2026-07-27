@@ -1,0 +1,26 @@
+# IM-LAM - Stage 1, dual loss.
+#
+# Identical to imlam_dmw_stage_1 (same interaction FDM, same dataset) except the FDM
+# reconstruction loss uses two SEPARATELY area-normalized terms instead of a single
+# union-gated term:
+#
+#   L = L_A + object_loss_weight * L_O
+#
+# Under the union loss (imlam_dmw_stage_1) agent and object pixels share one
+# normalization, so a small object mask is outweighed by the much larger agent mask
+# (push-v3: object pixels are ~0.5% of the union). The dual loss gives the object its own
+# budget, sized by object_loss_weight, independent of its pixel count.
+#
+# object_dual_loss and object_mask_loss are mutually exclusive (enforced in
+# SLAPOIDMModule.__init__). log_dual_loss_grad_every turns on the per-term L_O gradient-
+# norm diagnostic (is L_O actually moving the shared decoder, or being drowned out).
+defaults:
+  - imlam_dmw_stage_1
+  - _self_
+
+module:
+  object_mask_loss: false
+  object_dual_loss: true
+  object_loss_weight: 1.0  # lambda_o; override per-task from the CLI, e.g.
+                           # module.object_loss_weight=0.5 if a small-object task destabilizes.
+  log_dual_loss_grad_every: 500  # per-term L_O grad-norm diagnostic cadence (steps)

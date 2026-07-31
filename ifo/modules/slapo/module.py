@@ -248,6 +248,22 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.log_prefix = log_prefix
         self.action_variance = action_variance
 
+        if object_dual_loss and log_dual_loss_grad_every > 0:
+            # dual_loss_grad_norms calls torch.autograd.grad(..., retain_graph=True) twice per diagnostic
+            # step (once per loss term), ahead of the real training backward on the SAME compiled forward.
+            # Under trainer.compile=True, PyTorch's AOTAutograd "donated buffer" backward-memory
+            # optimization compiles the backward assuming a single retain_graph=False call, and raises at
+            # runtime the first time retain_graph=True is used - reproduced live: "RuntimeError: This
+            # backward function was compiled with non-empty donated buffers which requires
+            # create_graph=False and retain_graph=False ... or set
+            # torch._functorch.config.donated_buffer=False". Fires on literally the first training step
+            # (global_step % log_dual_loss_grad_every == 0 is true at step 0), so every compiled dual run
+            # hit this. Must be set here, at module construction - before trainer.fit() wraps
+            # training_step in torch.compile - not inside the diagnostic itself, since backward
+            # compilation is triggered by that first torch.autograd.grad call.
+            import torch._functorch.config as functorch_config
+            functorch_config.donated_buffer = False
+
     def _scoped_key(self, key: str) -> str:
         """Prepend ``self.log_prefix`` (e.g. ``"stage_1"``) to a raw ``self.logger.experiment.log`` key.
 
@@ -350,6 +366,55 @@ class SLAPOIDMModule(SupervisedLightningModule):
         norms sit in the same ``step_dict``, making the step diagnosable rather than a silent NaN cascade.
         """
         return (~torch.isfinite(loss)).float()
+
+    @torch.compiler.disable()
+    def _val_object_diagnostics(self, batch: TensorDict, object_mask: Tensor, input_mask: Tensor) -> dict:
+        """Eval-only per-batch object diagnostics (logged under ``val/``; the trainer means them over the epoch).
+
+        - ``object_E_O`` / ``object_E_O_copy`` / ``object_prediction_ratio``: held-out object-prediction
+          error over the object mask vs the trivial copy predictor ``o_{t+1}=o_t``. Works for any net with
+          an object mask (IM-LAM and Foreground), so W&B can compare the runs directly.
+        - ``object_R_no_transition``: agent-path dependence, **IM-LAM only** (a monolithic FDM has no
+          predicted agent transition to corrupt). ``E_O`` with the object's view of the predicted agent
+          transition replaced by the current one, over ``E_O`` normal; > 1 means object prediction routes
+          through the predicted agent transition. (The ``shuffled`` variant is left to
+          ``run_diagnostics.py``, which uses a shuffled loader - the validation loader is unshuffled, so a
+          batch-roll here would land on the adjacent, near-identical frame and under-report dependence.)
+
+        Disabled for ``torch.compile`` (``validation_step`` is compiled): mutating
+        ``net.future_obs_sampling`` under try/finally and calling the net multiple times is eval-only, so it
+        runs eager rather than forcing recompiles. Toggling ``future_obs_sampling`` off keeps ``z_t``
+        deterministic so the ratio isolates ``agent_ctx_mode`` rather than the random future-frame draw.
+        """
+        fs = self.net.frame_stack
+        target = batch["observation"][:, fs]
+        current = batch["observation"][:, fs - 1]
+        om = object_mask[:, fs]
+        is_imlam = hasattr(self.net, "extract_entities")  # IM-LAM marker: the directed agent-path is defined
+
+        def predict(mode):
+            if is_imlam:
+                return self.net(batch["observation"], input_mask, object_mask=object_mask, agent_ctx_mode=mode)[0]
+            return self.net(batch["observation"], input_mask, object_mask=object_mask)[0]
+
+        def e_o(mode):
+            return area_normalized_masked_mse((predict(mode) - target) ** 2, om)
+
+        toggle = hasattr(self.net, "future_obs_sampling")
+        saved = getattr(self.net, "future_obs_sampling", None)
+        if toggle:
+            self.net.future_obs_sampling = False
+        try:
+            eo_normal = e_o("normal")
+            e_copy = area_normalized_masked_mse((current - target) ** 2, om)
+            out = {"object_E_O": eo_normal, "object_E_O_copy": e_copy,
+                   "object_prediction_ratio": eo_normal / (e_copy + 1e-8)}
+            if is_imlam:
+                out["object_R_no_transition"] = e_o("no_transition") / (eo_normal + 1e-8)
+        finally:
+            if toggle:
+                self.net.future_obs_sampling = saved
+        return out
 
     @torch.compiler.disable()
     def _dual_loss_grad_diagnostics(self, loss_agent: Tensor, loss_object: Tensor) -> tuple[Tensor, Tensor]:
@@ -509,6 +574,12 @@ class SLAPOIDMModule(SupervisedLightningModule):
 
         # Divergence detector (all nets): flag a NaN/Inf loss so a blow-up is logged rather than silent.
         step_dict["loss_nonfinite"] = self._nonfinite_loss_flag(loss)
+
+        # Eval-only object diagnostics: the trainer means every val step_dict key under val/, so these are
+        # logged automatically per run (compare runs in W&B - no standalone script needed for the trend).
+        # Per-batch metrics only; the whole-split object-dynamics probe is a separate validation callback.
+        if prefix == "val" and has_object:
+            step_dict.update(self._val_object_diagnostics(batch, object_mask, input_mask))
 
         # Log predicted next observation vs ground truth on the last batch.
         if batch_idx == batch_len - 1 and self.debug_transform is not None:

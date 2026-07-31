@@ -210,6 +210,65 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_lapo_bc.py \
   table), so for those two override `dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld`
   on the command line - stage that repo instead (Section 2). Every other task uses the default above.
 
+### 5e. IM-LAM Union (Interaction-Masked LAM)
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
+  run_id=im-lam_<task>_union_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=imlam_union logger.notes="IM-LAM union <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn imlam_dmw_stage_1 \
+  --stage stage_2 -cn foreground_masklam_dmw_stage_2 \
+  --stage stage_3 -cn foreground_masklam_dmw_stage_3
+```
+- IM-LAM keeps MaskLAM's IDM and swaps only the Stage-1 FDM for the directed interaction predictor
+  (`IMLAMIDM` + `InteractionWorldModel`). The IDM encoder is byte-identical to MaskLAM's, so stages 2/3
+  reuse `foreground_masklam_dmw_stage_2/3` (frozen encoder, same `tsakman23` data) exactly as 5b/5c.
+  Stage `tsakman23/...` in Section 2. Runs under both losses, like Foreground-MaskLAM.
+- **Union** (above): `imlam_dmw_stage_1` (`object_mask_loss=true`, `object_mask_input=false`) - the FDM
+  loss over the agent ∪ object union, same loss axis as 5b.
+- **Matched ablation (direct-z)**: swap Stage 1 to `-cn imlam_direct_z_dmw_stage_1` (feeds `z_t` straight
+  to the object branch, breaking the directed embodiment->object path). Run on a **large-object** task
+  (e.g. `handle-pull-v3`); on small-object tasks the object branch is near-inert and the ablation ties.
+- Instrumented from step 0: per-head `beta` (`beta_msa_a/o` + `_min`), write-back norms (`proj_a/o_norm`),
+  `train/total_grad_norm`, `loss_nonfinite`, and eval-time `val/object_E_O` / `val/object_prediction_ratio`
+  / `val/object_R_no_transition`.
+- **Pre-flight** (optional; catches compile/bf16 failures before the full run - append to the Stage-1
+  command): `--selected_stages=[stage_1] ++logger.mode=offline eval=false trainer.max_epochs=null
+  trainer.max_steps=60 trainer.validation_frequency=50 trainer.validation_unit=step`.
+
+### 5f. IM-LAM Dual
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
+  run_id=im-lam_<task>_dual_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=imlam_dual logger.notes="IM-LAM dual <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn imlam_dual_dmw_stage_1 module.object_loss_weight=1.0 \
+  --stage stage_2 -cn foreground_masklam_dmw_stage_2 \
+  --stage stage_3 -cn foreground_masklam_dmw_stage_3
+```
+- Same interaction FDM as 5e, dual loss (`object_dual_loss=true`, `object_mask_loss=false` - mutually
+  exclusive). The matched comparison to the Foreground dual baseline (5c). Sweep `module.object_loss_weight`
+  (`lambda_O`) from the CLI (default 1.0); per-term `reconstruction_loss_agent`/`_object` log separately.
+  The direct-z ablation and pre-flight apply the same as 5e (swap `-cn imlam_direct_z_dmw_stage_1`).
+
+#### Stage-1 mechanism diagnostics (run after a union/dual/ablation run finishes)
+Compute the object-prediction / object-dynamics-probe / agent-path metrics on the frozen Stage-1
+checkpoint and push them into that run's W&B summary (under `eval/`), so IM-LAM / Foreground / direct-z
+compare directly in the runs table:
+```bash
+CUDA_VISIBLE_DEVICES=<n> python scripts/imlam_diagnostics/run_diagnostics.py \
+  --checkpoint checkpoints/im-lam_<task>_union_seed1-1/<latest-step>.ckpt \
+  --model imlam --loss union --task <task> \
+  --data-path /tmp/slapo_local \
+  --wandb-run-id im-lam_<task>_union_seed1
+```
+- Run once per checkpoint: IM-LAM union/dual, the same-loss Foreground baseline (`--model foreground`),
+  and the direct-z ablation (`--config-name imlam_direct_z_dmw_stage_1`). `--max-batches` bounds cost/RAM
+  (default 64; the full test split is ~100k samples). Diagnostics 1+3 use a shuffled loader, the probe a
+  sequential one.
+
 ---
 
 ### Visualize MaskLAM vs Foreground-MaskLAM reconstruction

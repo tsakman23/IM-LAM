@@ -36,12 +36,17 @@ class _FakeIMLAMNet(nn.Module):
         super().__init__()
         self.frame_stack = frame_stack
         self.segmentation_net = None
+        self.future_obs_sampling = True  # the val diagnostics should toggle this off and restore it
         self.received_object_mask = "UNSET"
+        self.modes_seen = []
 
     def forward(self, observation, mask, object_mask=None, agent_ctx_mode="normal", return_attn=False):
         self.received_object_mask = object_mask
+        self.modes_seen.append(agent_ctx_mode)
         b = observation.shape[0]
-        next_observation = torch.zeros(b, *IMG_SHAPE)
+        # Mode-dependent prediction so the agent-path ratios are non-degenerate.
+        fill = {"normal": 0.0, "no_transition": 0.1, "shuffled": 0.2}[agent_ctx_mode]
+        next_observation = torch.full((b, *IMG_SHAPE), fill)
         action_distribution = Normal(torch.zeros(b, ACTION_DIM), torch.ones(b, ACTION_DIM))
         return next_observation, action_distribution, torch.tensor(0.0), torch.tensor(0.0)
 
@@ -52,6 +57,11 @@ class _FakeIMLAMNet(nn.Module):
             "proj_a_norm": torch.tensor(0.0),
             "proj_o_norm": torch.tensor(0.5),
         }
+
+    def extract_entities(self, observation, mask, object_mask):
+        # IM-LAM marker + probe hook; dummy (A_t, O_t) token sets.
+        b = observation.shape[0]
+        return torch.zeros(b, 4, 8), torch.ones(b, 4, 8)
 
 
 class _FakePlainNet(nn.Module):
@@ -136,6 +146,34 @@ class IMLAMModuleWiringTest(unittest.TestCase):
         )
         self.assertFalse(torch.isfinite(blown["loss"]))
         self.assertEqual(blown["loss_nonfinite"].item(), 1.0)
+
+    def test_validation_logs_object_diagnostics_for_imlam(self):
+        # In validation, E_O / copy / ratio + the IM-LAM agent-path ratio must appear (the trainer means
+        # every val step_dict key under val/, so they log to W&B per run with no standalone script).
+        net = _FakeIMLAMNet()
+        step_dict = _make_module(net, object_mask_loss=True)._forward(
+            _make_batch(), batch_idx=0, batch_len=2, prefix="val"
+        )
+        for key in ("object_E_O", "object_E_O_copy", "object_prediction_ratio", "object_R_no_transition"):
+            self.assertIn(key, step_dict.keys())
+        self.assertIn("no_transition", net.modes_seen)     # agent_ctx_mode reached the net
+        self.assertTrue(net.future_obs_sampling)           # toggled off during the diagnostic, then restored
+
+    def test_training_does_not_log_object_diagnostics(self):
+        # The object diagnostics are eval-only; training steps must not pay the extra forwards.
+        step_dict = _make_module(_FakeIMLAMNet(), object_mask_loss=True)._forward(
+            _make_batch(), batch_idx=0, batch_len=2, prefix="train"
+        )
+        self.assertNotIn("object_E_O", step_dict.keys())
+
+    def test_baseline_val_logs_E_O_but_no_agent_path(self):
+        # E_O works for any net with an object mask (Foreground); agent-path is IM-LAM-only (no
+        # extract_entities -> no predicted agent transition to corrupt).
+        step_dict = _make_module(_FakePlainNet(), object_mask_loss=True)._forward(
+            _make_batch(), batch_idx=0, batch_len=2, prefix="val"
+        )
+        self.assertIn("object_E_O", step_dict.keys())
+        self.assertNotIn("object_R_no_transition", step_dict.keys())
 
     def test_plain_net_gets_no_interaction_diagnostics(self):
         # A MaskLAM/Foreground net (no interaction_diagnostics) must not gain instrumentation keys and

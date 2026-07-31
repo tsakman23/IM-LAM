@@ -8,6 +8,7 @@ from torch.distributions import Distribution
 from ifo.common.nets.actor import ActionHead
 from ifo.common.nets.base import FullyConnectedNeuralNetwork
 from ifo.common.nets.impala_cnn import ImpalaCNNBackbone
+from ifo.common.nets.interaction import pool_mask_occupancy
 from ifo.common.nets.quantizer import FiniteScalarQuantizer, IdentityQuantizer, VectorQuantizerEMA
 from ifo.common.nets.u_net import UNet
 from ifo.common.nets.world_model import ImpalaWorldModel, UNetWorldModel
@@ -220,6 +221,27 @@ class SLAPOIDM(nn.Module):
             future_observation = merge_tc(observation[:, -self.frame_stack:])
         return self.encoder(torch.cat([current_observation, future_observation], dim=1))
 
+    def probe_features(self, x: Tensor, mask: Tensor, object_mask: Tensor) -> Tuple[Tensor, Tensor]:
+        """Object-dynamics-probe features ``(agent_feature, object_feature)``, each ``(B, dim)``.
+
+        Baseline (monolithic-FDM) version for MaskLAM/Foreground: pools the shared FDM encoder bottleneck
+        over the current-frame agent / object occupancy, giving a comparable object-region read-out to
+        IM-LAM's ``O_t`` (which :class:`IMLAMIDM` overrides this with). Lets the object-dynamics probe run
+        on any model type from the same call.
+        """
+        fs = self.frame_stack
+        fdm_observation = torch.cat([x, mask], dim=-3) if self.add_mask_to_observation else x
+        b_t = self.decoder.encoder(merge_tc(fdm_observation[:, :fs]))   # (B, dim, H', W')
+        side = b_t.shape[-1]
+        tokens = b_t.flatten(2).transpose(1, 2)                          # (B, N, dim)
+        w_agent = pool_mask_occupancy(mask[:, fs - 1], side)             # (B, N) occupancy weights
+        w_object = pool_mask_occupancy(object_mask[:, fs - 1], side)
+
+        def pooled(w):
+            return (tokens * w.unsqueeze(-1)).sum(1) / w.sum(1, keepdim=True).clamp(min=1.0)
+
+        return pooled(w_agent), pooled(w_object)
+
 
 class IMLAMIDM(SLAPOIDM):
     """IM-LAM IDM: MaskLAM's IDM with the FDM replaced by the directed interaction predictor.
@@ -370,6 +392,22 @@ class IMLAMIDM(SLAPOIDM):
             "proj_a_norm": interaction.proj_a.weight.detach().norm(),
             "proj_o_norm": interaction.proj_o.weight.detach().norm(),
         }
+
+    def extract_entities(self, x: Tensor, mask: Tensor, object_mask: Tensor):
+        """Object-dynamics-probe features: the FDM's ``(A_t, O_t)`` bottleneck read-outs. Mirrors the FDM
+        input path of :meth:`forward` (``c+2`` current stack, current-frame masks) but stops at extraction.
+        Returns two ``(B, N, dim)`` token sets. Use under ``torch.no_grad`` for a frozen-model probe.
+        """
+        fdm_observation = torch.cat([x, mask, object_mask], dim=-3)
+        fdm_current = merge_tc(fdm_observation[:, :self.frame_stack])
+        agent_mask_t = mask[:, self.frame_stack - 1]
+        object_mask_t = object_mask[:, self.frame_stack - 1]
+        return self.decoder.extract_entities(fdm_current, agent_mask_t, object_mask_t)
+
+    def probe_features(self, x: Tensor, mask: Tensor, object_mask: Tensor) -> Tuple[Tensor, Tensor]:
+        """IM-LAM override: mean-pool the interaction read-outs ``(A_t, O_t)`` over tokens -> ``(B, dim)``."""
+        a_t, o_t = self.extract_entities(x, mask, object_mask)
+        return a_t.mean(1), o_t.mean(1)
 
 
 class SLAPOLatentPolicy(nn.Module):

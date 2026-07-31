@@ -336,6 +336,14 @@ class InteractionModule(nn.Module):
         o_t = self.msa_object(query, key, value, mask_bias=w_object)
         return a_t, o_t
 
+    def extract_entities(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
+        """Agent/object read-outs ``(A_t, O_t)`` from a spatial bottleneck ``B_t`` ``(B, dim, H', W')``.
+
+        Convenience wrapper (``_to_tokens`` + :meth:`extract`) exposing the entity read-outs the
+        object-dynamics probe regresses object motion from, without running the full FDM. Each ``(B, N, dim)``.
+        """
+        return self.extract(self._to_tokens(b_t), w_agent, w_object)
+
     def agent_dynamics(self, a_t: Tensor, z: Tensor) -> Tensor:
         """``\hat{A}_{t+1} = F_A(A_t, z_t)``: inject the latent action into the agent pathway.
 

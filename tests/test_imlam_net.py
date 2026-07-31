@@ -167,6 +167,26 @@ class IMLAMIDMTest(unittest.TestCase):
         self.assertEqual(attn.shape[0], self.b)
         self.assertEqual(attn.dim(), 4)  # (B, heads, N, 2N)
 
+    def test_extract_entities_returns_distinct_agent_object_readouts(self):
+        # The object-dynamics probe reads O_t (and A_t for the separation ratio) from the bottleneck.
+        net = _imlam().eval()
+        with torch.no_grad():
+            a_t, o_t = net.extract_entities(self.x, self.agent_mask, self.object_mask)
+        self.assertEqual(a_t.shape, o_t.shape)   # (B, N, dim) token sets
+        self.assertEqual(a_t.shape[0], self.b)
+        self.assertEqual(a_t.dim(), 3)
+        self.assertFalse(torch.equal(a_t, o_t))  # agent vs object mask bias -> different read-outs
+
+    def test_probe_features_uniform_across_model_types(self):
+        # The object-dynamics probe calls net.probe_features on any model; both must return a fixed
+        # (B, dim) agent/object feature (IM-LAM from its read-outs, baseline from the pooled bottleneck).
+        for net in (_imlam().eval(), _slapoidm().eval()):
+            with torch.no_grad():
+                a_feat, o_feat = net.probe_features(self.x, self.agent_mask, self.object_mask)
+            self.assertEqual(a_feat.shape, o_feat.shape)
+            self.assertEqual(a_feat.shape[0], self.b)
+            self.assertEqual(a_feat.dim(), 2)  # (B, dim)
+
     def test_forward_requires_object_mask(self):
         # IM-LAM's FDM is defined over agent+object masks; a missing object_mask is a usage error, not
         # a silent agent-only fallback.

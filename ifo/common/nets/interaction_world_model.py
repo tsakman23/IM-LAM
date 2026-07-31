@@ -141,3 +141,13 @@ class InteractionWorldModel(nn.Module):
         b_hat, attn = out if return_attn else (out, None)
         y = F.tanh(self.decoder(b_hat)) / 2  # normalize to [-0.5, 0.5], matching ImpalaWorldModel
         return (y, attn) if return_attn else y
+
+    def extract_entities(self, x: Tensor, agent_mask_t: Tensor, object_mask_t: Tensor):
+        """Object-dynamics-probe features: the ``(A_t, O_t)`` read-outs at the bottleneck, without the
+        agent-dynamics / write-back / decode. ``x`` is the ``(B, C, H, W)`` current frame stack; masks are
+        current-frame ``(B, 1, H, W)``. Returns two ``(B, N, dim)`` token sets (caller detaches as needed).
+        """
+        b_t = self.encoder(x)
+        w_agent = pool_mask_occupancy(agent_mask_t, self.side)
+        w_object = pool_mask_occupancy(object_mask_t, self.side)
+        return self.interaction.extract_entities(b_t, w_agent, w_object)

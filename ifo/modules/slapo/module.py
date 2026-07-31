@@ -248,6 +248,22 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.log_prefix = log_prefix
         self.action_variance = action_variance
 
+        if object_dual_loss and log_dual_loss_grad_every > 0:
+            # dual_loss_grad_norms calls torch.autograd.grad(..., retain_graph=True) twice per diagnostic
+            # step (once per loss term), ahead of the real training backward on the SAME compiled forward.
+            # Under trainer.compile=True, PyTorch's AOTAutograd "donated buffer" backward-memory
+            # optimization compiles the backward assuming a single retain_graph=False call, and raises at
+            # runtime the first time retain_graph=True is used - reproduced live: "RuntimeError: This
+            # backward function was compiled with non-empty donated buffers which requires
+            # create_graph=False and retain_graph=False ... or set
+            # torch._functorch.config.donated_buffer=False". Fires on literally the first training step
+            # (global_step % log_dual_loss_grad_every == 0 is true at step 0), so every compiled dual run
+            # hit this. Must be set here, at module construction - before trainer.fit() wraps
+            # training_step in torch.compile - not inside the diagnostic itself, since backward
+            # compilation is triggered by that first torch.autograd.grad call.
+            import torch._functorch.config as functorch_config
+            functorch_config.donated_buffer = False
+
     def _scoped_key(self, key: str) -> str:
         """Prepend ``self.log_prefix`` (e.g. ``"stage_1"``) to a raw ``self.logger.experiment.log`` key.
 

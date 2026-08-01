@@ -28,6 +28,7 @@ class LAPOIDMModule(SupervisedLightningModule):
         reconstruction_loss_scale_factor: float = 1.0,
         vq_loss_scale_factor: float = 1.0,
         action_loss_scale_factor: float = 1.0,
+        action_variance: Optional[float] = None,
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -44,12 +45,21 @@ class LAPOIDMModule(SupervisedLightningModule):
             vq_loss_scale_factor (float, optional): Scale factor for the VQ loss. Defaults to 1.0.
             reconstruction_loss_scale_factor (float, optional): Scale factor for the reconstruction loss. Defaults to 1.0.
             action_loss_scale_factor (float, optional): Scale factor for the action loss. Defaults to 1.0.
+            action_variance (Optional[float], optional): Per-task mean per-dimension variance of the
+                clipped ground-truth actions, Var(a) in the MaskLAM/LAOM NMSE convention (Eq. 5). When
+                set, ``action_decoder_nmse = action_decoder_mse / action_variance`` is additionally
+                logged next to the existing (unnormalized) ``action_decoder_mse``. Defaults to None
+                (metric not logged). Mirrors ``SLAPOIDMModule``'s identical parameter - see
+                ``ifo.modules.slapo.module.SLAPOIDMModule`` for the same caveat about this being an
+                online probe trained jointly with Stage 1, not a probe retrained from scratch on a
+                frozen checkpoint.
         """
         super().__init__(net, batch_size, optimizer, lr_scheduler, num_workers, max_grad_norm, **kwargs)
         self.debug_transform = debug_transform
         self.vq_loss_scale_factor = vq_loss_scale_factor
         self.reconstruction_loss_scale_factor = reconstruction_loss_scale_factor
         self.action_loss_scale_factor = action_loss_scale_factor
+        self.action_variance = action_variance
 
     @torch.no_grad()
     @torch.compiler.disable()
@@ -101,6 +111,8 @@ class LAPOIDMModule(SupervisedLightningModule):
             prefix="action_decoder_",
             metrics=step_dict
         )
+        if self.action_variance is not None and "action_decoder_mse" in step_dict.keys():
+            step_dict["action_decoder_nmse"] = step_dict["action_decoder_mse"] / self.action_variance
 
         # Log predicted next observation vs ground truth on the last batch.
         if batch_idx == batch_len - 1 and self.debug_transform is not None:

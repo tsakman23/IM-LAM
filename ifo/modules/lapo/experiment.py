@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 
 from ifo.common.experiment import Experiment
 from ifo.common.transforms.debug import get_debug_transform
+from ifo.common.utils.expert_constants import get_action_variance
 from ifo.common.utils.hydra import hydra_main_multistage
 from ifo.common.utils.utility import (
     Conditional,
@@ -47,7 +48,16 @@ class LAPOExperiment(Experiment):
 
         # Initialize model.
         net = hydra.utils.instantiate(cfg.net)(observation_space=observation_space, action_space=action_space)
-        module = hydra.utils.instantiate(cfg.module, net=net, debug_transform=get_debug_transform(cfg.dataset.name))
+        # Var(a) for action_decoder_nmse: auto-resolved from the task in cfg.env.name via the
+        # ACTION_VARIANCE table (ifo.common.utils.expert_constants), unless a config/CLI override
+        # (module.action_variance=...) is already set, which takes precedence. Mirrors SLAPOExperiment.
+        action_variance = cfg.module.get("action_variance")
+        if action_variance is None:
+            action_variance = get_action_variance(cfg.env.name)
+        module = hydra.utils.instantiate(
+            cfg.module, net=net, debug_transform=get_debug_transform(cfg.dataset.name),
+            action_variance=action_variance,
+        )
 
         # Initialize datasets.
         train_dataset = hydra.utils.instantiate(cfg.dataset, split="train")

@@ -37,8 +37,11 @@ module:
                            # module.object_loss_weight=0.5
 
 dataset:
-  # Pull observation_distracted + agent mask + object_mask from my regenerated repo.
+  # Pull observation_distracted + agent mask + object_mask + object_state from my regenerated repo.
+  # object_state is dataset-only (never fed to the net) - needed by the Phase-8 object-dynamics probe
+  # (scripts/imlam_diagnostics/run_diagnostics.py --model foreground), not by training itself.
   with_object_mask: true
+  with_object_state: true
   dataset_path: tsakman23/visual_masked_distracting_metaworld
   # Persistent cache that matches scripts/download_dataset.py's default
   # (./datasets/slapo/<env>), so a pre-fetched split cache-hits at train time. The

@@ -71,7 +71,7 @@ python scripts/save_local_dataset.py \
   --repo EpicPinkPenguin/visual_distracting_metaworld --task <task> \
   --splits test train --out-root /tmp/slapo_local
 
-# Foreground-MaskLAM data (object masks):
+# IM-LAM data (object masks):
 python scripts/save_local_dataset.py \
   --repo tsakman23/visual_masked_distracting_metaworld --task <task> \
   --splits test train --out-root /tmp/slapo_local
@@ -260,9 +260,9 @@ compare directly in the runs table:
 ```bash
 CUDA_VISIBLE_DEVICES=<n> python scripts/imlam_diagnostics/run_diagnostics.py \
   --checkpoint checkpoints/im-lam_<task>_union_seed1-1/<latest-step>.ckpt \
-  --model imlam --loss union --task <task> \
+  --model imlam --task <task> \
   --data-path /tmp/slapo_local \
-  --wandb-run-id im-lam_<task>_union_seed1
+  --wandb-run-id
 ```
 - Run once per checkpoint: IM-LAM union/dual, the same-loss Foreground baseline (`--model foreground`),
   and the direct-z ablation (`--config-name imlam_direct_z_dmw_stage_1`). `--max-batches` bounds cost/RAM

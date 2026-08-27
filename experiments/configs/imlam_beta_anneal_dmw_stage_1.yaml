@@ -1,0 +1,24 @@
+# IM-LAM union, extraction-beta ANNEALING - Stage 1.
+#
+# Starts the extraction mask-bias beta at the known-good 2.0 (a frozen buffer) and linearly anneals it
+# up to `end` over `anneal_steps` training steps, then holds - so early training matches vanilla IM-LAM
+# and the extraction sharpens late, never imposing the hard constraint before the model is ready. The
+# annealed beta is visible in W&B via the existing beta_msa_a/beta_msa_o diagnostics.
+#
+# Compare against vanilla IM-LAM (learnable beta ~2) and the fixed hard-gate (++net.world_model.
+# extraction_beta=10). Stages 2/3 are unchanged (foreground_masklam_dmw_stage_{2,3}).
+defaults:
+  - imlam_dmw_stage_1
+  - _self_
+
+net:
+  world_model:
+    # Anneal START; making beta a frozen buffer is what lets the callback drive it (a learnable beta
+    # would be fought by the optimizer). Keep this equal to extraction_beta_anneal.start below.
+    extraction_beta: 2.0
+
+extraction_beta_anneal:
+  _target_: ifo.modules.slapo.callbacks.ExtractionBetaAnneal
+  start: 2.0
+  end: 10.0
+  anneal_steps: 15000    # ~first half of the 31248-step Stage-1 schedule; held at `end` afterward

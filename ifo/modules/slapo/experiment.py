@@ -109,6 +109,10 @@ class SLAPOExperiment(Experiment):
         # Initialize trainer and start training.
         checkpoint_dir = f"{cfg.trainer.checkpoint_dir}/{cfg.stage_run_id}"
         trainer = hydra.utils.instantiate(cfg.trainer, fabric=fabric, checkpoint_dir=checkpoint_dir)
+        # Optional extraction-beta annealing curriculum (absent by default -> no-op).
+        beta_anneal_cfg = cfg.get("extraction_beta_anneal", None)
+        if beta_anneal_cfg is not None:
+            fabric._callbacks.append(hydra.utils.instantiate(beta_anneal_cfg))
         trainer.fit(
             model=module,
             train_dataset=train_dataset,

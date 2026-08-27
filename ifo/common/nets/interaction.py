@@ -220,6 +220,7 @@ class InteractionModule(nn.Module):
         mlp_ratio: int = 4,
         direct_z_to_object: bool = False,
         dilate_iters: int = 1,
+        extraction_beta: Optional[float] = None,
         *,
         num_res_blocks: int,
     ) -> None:
@@ -254,8 +255,12 @@ class InteractionModule(nn.Module):
         # Two independently parameterized read-out heads. Separate weight sets, together
         # with the distinct mask biases, are what separate the agent and object read-outs -
         # which is why the design deliberately carries no per-entity embedding.
-        self.msa_agent = MaskBiasedAttention(dim, num_heads)
-        self.msa_object = MaskBiasedAttention(dim, num_heads)
+        # extraction_beta None -> default learnable beta init 2.0 (unchanged). Set -> fixed, frozen beta
+        # (Phase-10 hard-gate/sharpened-extraction ablation), applied to both entity read-out heads.
+        _beta_init = extraction_beta if extraction_beta is not None else 2.0
+        _freeze = extraction_beta is not None
+        self.msa_agent = MaskBiasedAttention(dim, num_heads, beta_init=_beta_init, freeze_beta=_freeze)
+        self.msa_object = MaskBiasedAttention(dim, num_heads, beta_init=_beta_init, freeze_beta=_freeze)
         # LayerNorm goes exactly where the tags go - on the attention Q/K, never on V. B_t comes from a
         # norm-free IMPALA encoder with unbounded activation magnitude, so without this the content
         # logits can dwarf the mask bias beta*W (mask ~ [0, 2] at init), making the mask - the mechanism

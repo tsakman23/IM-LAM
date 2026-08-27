@@ -1,6 +1,39 @@
 from tensordict import TensorDict
 
+from ifo.common.nets.mask_biased_attention import MaskBiasedAttention
 from ifo.common.trainer import SupervisedTrainer
+
+
+class ExtractionBetaAnneal:
+    """Linearly anneal the (frozen) extraction mask-bias ``beta`` from ``start`` to ``end`` over
+    ``anneal_steps`` training steps, then hold at ``end``.
+
+    Train under the known-good soft bias early, tighten toward the hard-gate late, so the hard 
+    constraint is never imposed before the model has learned useful features. Operates only on 
+    ``MaskBiasedAttention`` ``beta`` BUFFERS - i.e. modules built with a frozen ``extraction_beta`` 
+    (set ``net.world_model.extraction_beta`` to the ``start`` value); learnable-``beta`` modules 
+    are left untouched. The annealed value is visible in W&B via the existing
+    ``beta_msa_a``/``beta_msa_o`` diagnostics, since they read the same buffer.
+    """
+
+    def __init__(self, start: float, end: float, anneal_steps: int) -> None:
+        """Initialize the callback.
+
+        Args:
+            start (float): Beta at step 0 (should match ``net.world_model.extraction_beta``).
+            end (float): Beta held after ``anneal_steps`` (the hard-gate strength).
+            anneal_steps (int): Steps over which beta ramps linearly from ``start`` to ``end``.
+        """
+        self.start, self.end, self.anneal_steps = float(start), float(end), int(anneal_steps)
+
+    def train_batch_start(self, trainer: SupervisedTrainer, model, **kwargs) -> None:
+        """Set every frozen extraction beta to the annealed value for the current step."""
+        frac = min(1.0, trainer.global_step / max(1, self.anneal_steps))
+        value = self.start + (self.end - self.start) * frac
+        for module in model.modules():
+            beta = getattr(module, "beta", None)
+            if isinstance(module, MaskBiasedAttention) and beta is not None and not beta.requires_grad:
+                beta.data.fill_(value)
 
 
 class StopThresholdIOU:

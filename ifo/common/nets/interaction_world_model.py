@@ -1,4 +1,4 @@
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -41,6 +41,7 @@ class InteractionWorldModel(nn.Module):
         dilate_iters: int = 1,
         use_orthogonal_init: bool = False,
         direct_z_to_object: bool = False,
+        extraction_beta: Optional[float] = None,
     ) -> None:
         """Instantiate the IM-LAM FDM.
 
@@ -84,6 +85,7 @@ class InteractionWorldModel(nn.Module):
             mlp_ratio=mlp_ratio,
             dilate_iters=dilate_iters,
             direct_z_to_object=direct_z_to_object,
+            extraction_beta=extraction_beta,
             num_res_blocks=encoder_num_res_blocks,
         )
         assert self.interaction.f_a.num_res_blocks == encoder_num_res_blocks, (

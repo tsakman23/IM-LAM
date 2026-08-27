@@ -26,7 +26,8 @@ class MaskBiasedAttention(nn.Module):
     attention logits are a known instability source.
     """
 
-    def __init__(self, dim: int, num_heads: int, proj_bias: bool = True, use_mask_bias: bool = True) -> None:
+    def __init__(self, dim: int, num_heads: int, proj_bias: bool = True, use_mask_bias: bool = True,
+                 beta_init: float = 2.0, freeze_beta: bool = False) -> None:
         """Instantiate mask-biased attention.
 
         Args:
@@ -36,6 +37,12 @@ class MaskBiasedAttention(nn.Module):
             use_mask_bias (bool, optional): Whether to create the learnable per-head bias scale
                 ``beta``. Set False for plain (unbiased) cross-attention that is always called with
                 ``mask_bias=None``, so no dead ``beta`` parameter sits in the optimizer / weight decay.
+            beta_init (float, optional): Initial value of the per-head bias scale (default 2.0, proposal
+                S5.5 / A.2 N3). A large value (e.g. 10-20) with ``freeze_beta`` approximates a hard mask
+                gate (``beta -> inf``), the Phase-10 extraction-sharpening ablation.
+            freeze_beta (bool, optional): If True, ``beta`` is a non-learnable buffer fixed at
+                ``beta_init`` - so the extraction bias stays at the chosen strength instead of drifting
+                (it was observed to drift 2.0 -> ~1.92). Used to hold the hard-gate regime fixed.
         """
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} must be divisible by num_heads {num_heads}."
@@ -49,9 +56,14 @@ class MaskBiasedAttention(nn.Module):
         self.v_proj = nn.Linear(dim, dim, bias=proj_bias)
         self.out_proj = nn.Linear(dim, dim, bias=proj_bias)
 
-        # Learnable per-head bias scale, initialized to 2.0 (proposal S5.5 / A.2 N3). None when the
-        # instance is used only for unbiased attention, so it carries no unused parameter.
-        self.beta = nn.Parameter(torch.full((num_heads,), 2.0)) if use_mask_bias else None
+        # Per-head bias scale. None when used only for unbiased attention (no unused parameter).
+        # Frozen -> a fixed non-learnable buffer at beta_init (hard-gate ablation); else a learnable param.
+        if not use_mask_bias:
+            self.beta = None
+        elif freeze_beta:
+            self.register_buffer("beta", torch.full((num_heads,), float(beta_init)))
+        else:
+            self.beta = nn.Parameter(torch.full((num_heads,), float(beta_init)))
 
     def _split_heads(self, x: Tensor) -> Tensor:
         """(B, N, dim) -> (B, num_heads, N, head_dim)."""

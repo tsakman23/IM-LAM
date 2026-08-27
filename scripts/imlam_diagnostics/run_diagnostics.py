@@ -11,13 +11,26 @@
 The per-batch cores live in this file (tested on synthetic data in tests/test_object_diagnostics.py via
 metrics.py + the model's extract_entities); this script only adds checkpoint/data loading and aggregation.
 
+Every run also appends one row to results/imlam_diagnostics.csv by default (fixed header, safe to
+accumulate across models/tasks/seeds - see --results-csv/--run-name/--run-seed). Run
+results_table.py afterward to pivot that CSV into a readable Markdown summary.
+
+--loss, --run-seed, and --wandb-run-id's run id are all auto-derived from the checkpoint path by
+default (its parent directory name, e.g. 'im-lam_handle-pull_dual_seed2-1'): 'dual' if that
+word appears else 'union'; the digits after 'seed'; and the dir name with the trailing pipeline-stage
+suffix (-1/-2/-3) stripped, respectively. Pass --loss/--run-seed explicitly to override.
+
 Usage (env per docs/experiments.md):
     python scripts/imlam_diagnostics/run_diagnostics.py \
-        --checkpoint checkpoints/<imlam_run>/step-000031248.ckpt --loss dual --task handle-pull-v3
+        --checkpoint checkpoints/<imlam_run>/step-000031248.ckpt --task handle-pull-v3 --model imlam --wandb-run-id
 """
 import argparse
+import csv
+import datetime
 import os
+import re
 import sys
+from typing import Optional
 
 import numpy as np
 import torch
@@ -48,6 +61,57 @@ CONFIG_BY_MODEL_LOSS = {
     ("foreground", "union"): "foreground_masklam_dmw_stage_1",
     ("foreground", "dual"): "foreground_masklam_dual_dmw_stage_1",
 }
+
+DEFAULT_RESULTS_CSV = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "results", "imlam_diagnostics.csv"))
+# Fixed superset of columns: not every model produces every metric (R_no_transition/R_shuffled are
+# IM-LAM-only, since Foreground/direct-z have no agent_ctx_mode), so the header stays stable across
+# appends regardless of which run wrote it - missing values are just blank cells, not missing columns.
+RUN_FIELDS = ["timestamp", "run_name", "seed", "model", "loss", "task", "checkpoint", "config_name",
+              "split", "batch_size", "max_batches"]
+METRIC_FIELDS = ["E_O", "E_O_copy", "ObjectPredictionRatio", "R_no_transition", "R_shuffled",
+                  "R2_object", "NMSE_object", "Var_delta", "R2_agent", "SeparationRatio"]
+CSV_FIELDNAMES = RUN_FIELDS + METRIC_FIELDS
+
+
+def _checkpoint_dirname(checkpoint: str) -> str:
+    """The checkpoint's parent directory name, e.g. 'im-lam_handle-pull_union_seed2-1' from
+    '.../checkpoints/im-lam_handle-pull_union_seed2-1/step-000031248.ckpt'."""
+    return os.path.basename(os.path.dirname(os.path.abspath(checkpoint)))
+
+
+def infer_wandb_run_id(checkpoint: str) -> str:
+    """Strip the trailing pipeline-stage suffix from the checkpoint dir name: the '-1'/'-2'/'-3'
+    dirs are Stage 1/2/3 checkpoints of ONE W&B run, not separate runs - e.g.
+    'im-lam_handle-pull_union_seed2-1' -> 'im-lam_handle-pull_union_seed2'."""
+    return re.sub(r"-\d+$", "", _checkpoint_dirname(checkpoint))
+
+
+def infer_seed(checkpoint: str) -> Optional[str]:
+    """The digits following 'seed' in the checkpoint dir name, e.g. '...seed2-1' -> '2'."""
+    m = re.search(r"seed(\d+)", _checkpoint_dirname(checkpoint), re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def infer_loss(checkpoint: str) -> str:
+    """'dual' if that word appears (case-insensitive) in the checkpoint dir name, else 'union'."""
+    return "dual" if "dual" in _checkpoint_dirname(checkpoint).lower() else "union"
+
+
+def append_results_csv(csv_path, run_info, flat_results):
+    """Append one row (this run's metadata + metrics) to the accumulating results CSV.
+
+    Append-only, fixed header (CSV_FIELDNAMES) - repeated runs across models/tasks/seeds build up one
+    growing table rather than overwriting each other. Use results_table.py to pivot it into a summary.
+    """
+    row = {**run_info, **flat_results}
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    is_new = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, restval="", extrasaction="ignore")
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+    print(f"\nappended results row to {csv_path}")
 
 
 def push_to_wandb(flat_results, run_id, project, entity, scope="eval"):
@@ -188,23 +252,44 @@ def main():
     p.add_argument("--checkpoint", required=True, help="Frozen Stage-1 checkpoint (.ckpt).")
     p.add_argument("--model", choices=["imlam", "foreground"], default="imlam",
                    help="Which model the checkpoint is (agent-path is auto-skipped for foreground).")
-    p.add_argument("--loss", choices=["union", "dual"], default="dual")
+    p.add_argument("--loss", choices=["union", "dual"], default=None,
+                   help="Defaults to auto-detected from the checkpoint path: 'dual' if that word "
+                         "appears in the checkpoint's directory name, else 'union'.")
     p.add_argument("--config-name", default=None,
                    help="Override the composed config, e.g. imlam_direct_z_dmw_stage_1 for the ablation.")
-    p.add_argument("--task", default="handle-pull-v3")
+    p.add_argument("--task", default=None, required=True, help="DMW task name (e.g. handle-pull-v3).")
     p.add_argument("--data-path", default=None, help="Local dataset dir; default = the config's HF repo.")
     p.add_argument("--split", default="test")
     p.add_argument("--batch-size", type=int, default=64)
-    p.add_argument("--max-batches", type=int, default=64,
+    p.add_argument("--max-batches", type=int, default=1562,
                    help="Batches per diagnostic (loaders iterate lazily). None = whole split (can be huge).")
     p.add_argument("--k", type=int, default=10, help="Probe horizon (matched to future_obs_offset).")
     p.add_argument("--seed", type=int, default=0, help="Seed for the shuffled loader (diagnostics 1 + 3).")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--wandb-run-id", default=None,
-                   help="If set, push the diagnostics into this EXISTING W&B run's summary (under eval/).")
+    p.add_argument("--wandb-run-id", action="store_true",
+                   help="If set, push the diagnostics into the checkpoint's own W&B run's summary "
+                        "(under eval/). The run id is auto-derived from the checkpoint path: its "
+                        "directory name with the trailing pipeline-stage suffix (-1/-2/-3) stripped.")
     p.add_argument("--wandb-project", default="masklam")
+    p.add_argument("--results-csv", default=DEFAULT_RESULTS_CSV,
+                   help="Append this run's results as one row here (fixed header, safe to accumulate "
+                        "across models/tasks/seeds). Set to '' to skip writing.")
+    p.add_argument("--run-name", default=None,
+                   help="Label for this row (default: the checkpoint's parent directory name, e.g. "
+                         "'fg_masklam_handle-pull_seed1-1').")
+    p.add_argument("--run-seed", default=None,
+                   help="Training-seed label for this row (e.g. '1'). Defaults to auto-extracted "
+                         "from the checkpoint path (the digits following 'seed'); pass explicitly to "
+                         "override. Distinct from --seed, which seeds the diagnostics' own shuffled "
+                         "loader.")
     args = p.parse_args()
     device = torch.device(args.device)
+
+    if args.loss is None:
+        args.loss = infer_loss(args.checkpoint)
+    if args.run_seed is None:
+        args.run_seed = infer_seed(args.checkpoint)
+    wandb_run_id = infer_wandb_run_id(args.checkpoint) if args.wandb_run_id else None
 
     # Compose the same Stage-1 config the run used, so the net/dataset are built identically. The grad
     # diagnostic is disabled (no trainer here, so no global_step); data-path override picks a local split.
@@ -243,8 +328,23 @@ def main():
             flat_results[key] = value.item()
 
     # Push into the training run's summary so all three models' numbers sit together in the W&B runs table.
-    if args.wandb_run_id:
-        push_to_wandb(flat_results, args.wandb_run_id, args.wandb_project, "gtsakoumakis-newcastle-university")
+    if wandb_run_id:
+        # if run id isn't found, raise an error (don't silently create a new run - the point is to push into an existing run's summary)
+        try:
+            push_to_wandb(flat_results, wandb_run_id, args.wandb_project, "gtsakoumakis-newcastle-university")
+        except Exception as e:
+            print(f"Error pushing to W&B run {wandb_run_id}: {e}")
+            sys.exit(1)
+
+    if args.results_csv:
+        run_name = args.run_name or os.path.basename(os.path.dirname(os.path.abspath(args.checkpoint)))
+        run_info = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "run_name": run_name, "seed": args.run_seed or "", "model": args.model, "loss": args.loss,
+            "task": args.task, "checkpoint": args.checkpoint, "config_name": config_name,
+            "split": args.split, "batch_size": args.batch_size, "max_batches": args.max_batches,
+        }
+        append_results_csv(args.results_csv, run_info, flat_results)
 
 
 if __name__ == "__main__":

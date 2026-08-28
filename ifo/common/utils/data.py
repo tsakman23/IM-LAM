@@ -321,6 +321,30 @@ def get_masked_distracting_control_suite_dataset(
 
 
 
+def build_mask_columns(
+    with_object_mask: bool, with_object_state: bool, mask_source: str = "gt"
+) -> list:
+    """Columns to load for a Meta-World dataset given the mask source.
+
+    ``mask_source="sam"`` appends the predicted-mask columns (``pred_mask``, and
+    ``pred_object_mask`` when object masks are loaded) *in addition to* the GT
+    ``mask``/``object_mask`` - non-destructive, so both are available and the
+    module's ``apply_mask_source`` selects between them. ``"gt"`` loads GT only.
+    """
+    if mask_source not in ("gt", "sam"):
+        raise ValueError(f"mask_source must be 'gt' or 'sam', got {mask_source!r}")
+    columns = ["observation", "mask", "action"]
+    if with_object_mask:
+        columns.append("object_mask")
+    if with_object_state:
+        columns.append("object_state")
+    if mask_source == "sam":
+        columns.append("pred_mask")
+        if with_object_mask:
+            columns.append("pred_object_mask")
+    return columns
+
+
 def get_metaworld_dataset(
     env_name: str,
     split: str,
@@ -330,6 +354,7 @@ def get_metaworld_dataset(
     path: Optional[str] = None,
     with_object_mask: bool = False,
     with_object_state: bool = False,
+    mask_source: str = "gt",
 ) -> MetaWorldDataset:
     """Get the available Meta-World dataset (handles both distracted and vanilla).
     Args:
@@ -347,6 +372,10 @@ def get_metaworld_dataset(
         with_object_state (bool): If True, also load the ``object_state`` column
             (world-frame object pos + quat; only present in the object-mask repos).
             Needed by the object-dynamics probe, not by training.
+        mask_source (str): "gt" (default) loads only the ground-truth simulator
+            masks; "sam" additionally loads the predicted pred_mask/pred_object_mask
+            columns (non-destructive) so the module can train on them. Requires a
+            superset dataset that carries the predicted-mask columns.
     Returns:
         MetaWorldDataset: Available Meta-World dataset.
     """
@@ -371,11 +400,7 @@ def get_metaworld_dataset(
         use_sam_mask = True
         name = name.replace("sam-", "")
 
-    columns = ["observation", "mask", "action"]
-    if with_object_mask:
-        columns.append("object_mask")
-    if with_object_state:
-        columns.append("object_state")
+    columns = build_mask_columns(with_object_mask, with_object_state, mask_source)
 
     dataset_kwargs = dict(
         name=name,  # bare HF config name, e.g. "basketball-v3"
@@ -400,6 +425,7 @@ def get_dataset(
     dataset_path: Optional[str] = None,
     with_object_mask: bool = False,
     with_object_state: bool = False,
+    mask_source: str = "gt",
     **kwargs,
 ) -> Dataset:
     """
@@ -419,6 +445,9 @@ def get_dataset(
             (Meta-World only; object-mask repos only). Needed by the object-dynamics
             probe (Sec. 7.4.2 of the proposal), which regresses k-step object-state
             deltas Delta s = s_{t+k} - s_t from frozen Stage-1 features.
+        mask_source (str): "gt" (default, ground-truth simulator masks) or "sam"
+            (also load predicted pred_mask/pred_object_mask, non-destructively).
+            Meta-World only.
         **kwargs: Additional arguments for the dataset.
 
     Returns:
@@ -434,7 +463,7 @@ def get_dataset(
         return get_metaworld_dataset(
             name, split, cache_dir, block_size, transform,
             path=dataset_path, with_object_mask=with_object_mask,
-            with_object_state=with_object_state,
+            with_object_state=with_object_state, mask_source=mask_source,
         )
     else:
         raise NotImplementedError("Dataset is currently not supported for this submission.")

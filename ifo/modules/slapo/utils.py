@@ -6,6 +6,48 @@ from tensordict import TensorDict
 from torch import Tensor
 
 
+def apply_mask_source(batch: TensorDict, mask_source: str) -> TensorDict:
+    """Select which masks feed the FDM: ground-truth simulator masks or predicted
+    (SAM2/Grounding-DINO) masks. Non-destructive at the dataset level - both column
+    sets are loaded; this only chooses which ones the module reads downstream.
+
+    - ``"gt"`` (default): no-op. ``mask``/``object_mask`` stay the GT masks - the
+      training path is byte-identical to not calling this.
+    - ``"sam"``: swap in the predicted masks, i.e. ``mask <- pred_mask`` and
+      ``object_mask <- pred_object_mask``. Requires ``pred_mask`` in the batch;
+      if a GT ``object_mask`` is loaded it also requires ``pred_object_mask`` (so
+      an object run cannot silently mix a SAM agent mask with a GT object mask).
+
+    Args:
+        batch: The batch TensorDict (modified in place for ``"sam"``).
+        mask_source: ``"gt"`` or ``"sam"``.
+
+    Returns:
+        The same ``batch``.
+    """
+    if mask_source == "gt":
+        return batch
+    if mask_source != "sam":
+        raise ValueError(f"mask_source must be 'gt' or 'sam', got {mask_source!r}")
+
+    keys = set(batch.keys())
+    if "pred_mask" not in keys:
+        raise KeyError(
+            "mask_source='sam' requires a 'pred_mask' column in the batch. Load a "
+            "superset dataset that carries predicted masks (dataset mask_source='sam')."
+        )
+    if "object_mask" in keys and "pred_object_mask" not in keys:
+        raise KeyError(
+            "mask_source='sam' with an 'object_mask' loaded also requires "
+            "'pred_object_mask' (refusing to mix a SAM agent mask with a GT object mask)."
+        )
+
+    batch["mask"] = batch["pred_mask"]
+    if "pred_object_mask" in keys:
+        batch["object_mask"] = batch["pred_object_mask"]
+    return batch
+
+
 @torch.compiler.disable()
 @torch.no_grad()
 def agent_occlusion(batch: TensorDict, occlusion_fraction: float, fill_value: Union[float, Tensor]) -> TensorDict:

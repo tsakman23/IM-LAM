@@ -12,6 +12,7 @@ from ifo.common.utils.actions import get_action_metrics
 from ifo.common.utils.render import make_comp_grid
 from ifo.modules.slapo.utils import (
     agent_occlusion,
+    apply_mask_source,
     area_normalized_masked_mse,
     dilate_mask,
     dual_loss_grad_norms,
@@ -149,6 +150,7 @@ class SLAPOIDMModule(SupervisedLightningModule):
         log_dual_loss_grad_every: int = 0,
         log_prefix: Optional[str] = None,
         action_variance: Optional[float] = None,
+        mask_source: str = "gt",
         **kwargs,
     ) -> None:
         """Instantiate module for learning an inverse dynamics model.
@@ -216,6 +218,11 @@ class SLAPOIDMModule(SupervisedLightningModule):
                 retrained from scratch on a frozen checkpoint; treat NMSE values from
                 this online probe as consistent for comparing your own arms against
                 each other, not as directly comparable to MaskLAM's published numbers).
+            mask_source (str, optional): Which masks feed the FDM: "gt" (default,
+                ground-truth simulator masks - byte-identical to prior behavior) or
+                "sam" (swap in the predicted pred_mask/pred_object_mask). "sam"
+                requires a superset dataset loaded with the predicted-mask columns
+                (dataset mask_source="sam"). Defaults to "gt".
         """
         if object_mask_loss and object_dual_loss:
             raise ValueError(
@@ -254,6 +261,9 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.log_dual_loss_grad_every = log_dual_loss_grad_every
         self.log_prefix = log_prefix
         self.action_variance = action_variance
+        if mask_source not in ("gt", "sam"):
+            raise ValueError(f"mask_source must be 'gt' or 'sam', got {mask_source!r}")
+        self.mask_source = mask_source
 
         if object_dual_loss and log_dual_loss_grad_every > 0:
             # dual_loss_grad_norms calls torch.autograd.grad(..., retain_graph=True) twice per diagnostic
@@ -454,6 +464,9 @@ class SLAPOIDMModule(SupervisedLightningModule):
         Returns:
             TensorDict: Dictionary with loss and other metrics to log.
         """
+        # Select GT vs predicted (SAM2/Grounding-DINO) masks before any mask use.
+        batch = apply_mask_source(batch, self.mask_source)
+
         if self.occlude_mask_observation:
             batch = agent_occlusion(batch, self.occlude_mask_observation_fraction, 0.0)
 

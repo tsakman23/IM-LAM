@@ -243,7 +243,14 @@ class SLAPOIDMModule(SupervisedLightningModule):
         self.object_mask_input = object_mask_input
         # separately-normalized agent/object dual loss (see docstring above).
         self.object_dual_loss = object_dual_loss
-        self.object_loss_weight = object_loss_weight
+        # A tensor BUFFER (not a Python float) so ObjectLossWeightAnneal can ramp lambda_o in-place
+        # each step: a float would be a torch.compile guard and mutating it would force a recompile
+        # every step, whereas a buffer is a graph input (dual_masked_reconstruction_loss multiplies
+        # it as a scalar tensor - utils.py). Constant for the default (non-annealed) path.
+        # persistent=False keeps it OUT of the checkpoint: it is re-derived from config each run (or
+        # every step by the anneal callback from global_step), so persisting it would only risk
+        # breaking a strict resume of Stage-1 checkpoints saved before this buffer existed.
+        self.register_buffer("object_loss_weight", torch.tensor(float(object_loss_weight)), persistent=False)
         self.log_dual_loss_grad_every = log_dual_loss_grad_every
         self.log_prefix = log_prefix
         self.action_variance = action_variance

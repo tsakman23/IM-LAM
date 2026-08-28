@@ -113,6 +113,10 @@ class SLAPOExperiment(Experiment):
         beta_anneal_cfg = cfg.get("extraction_beta_anneal", None)
         if beta_anneal_cfg is not None:
             fabric._callbacks.append(hydra.utils.instantiate(beta_anneal_cfg))
+        # Optional dual-loss object-term warm-up (absent by default -> no-op).
+        object_loss_anneal_cfg = cfg.get("object_loss_weight_anneal", None)
+        if object_loss_anneal_cfg is not None:
+            fabric._callbacks.append(hydra.utils.instantiate(object_loss_anneal_cfg))
         trainer.fit(
             model=module,
             train_dataset=train_dataset,

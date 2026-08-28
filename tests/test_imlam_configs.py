@@ -19,6 +19,7 @@ from hydra import compose, initialize_config_dir
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ifo.common.nets.interaction_world_model import InteractionWorldModel
+from ifo.modules.slapo.callbacks import ObjectLossWeightAnneal
 from ifo.modules.slapo.nets import IMLAMIDM
 
 CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "experiments", "configs"))
@@ -57,6 +58,18 @@ class IMLAMConfigTest(unittest.TestCase):
         self.assertTrue(cfg.module.object_dual_loss)
         self.assertEqual(cfg.module.object_loss_weight, 1.0)
         self.assertGreater(cfg.module.log_dual_loss_grad_every, 0)  # L_O grad diagnostic enabled
+
+    def test_dual_anneal_config_wires_the_object_weight_warmup(self):
+        cfg, net = _instantiate_net("imlam_dual_anneal_dmw_stage_1")
+        self.assertIsInstance(net, IMLAMIDM)
+        # Inherits the dual loss...
+        self.assertTrue(cfg.module.object_dual_loss)
+        # ...but initializes the weight at the anneal start (0.0), not the fixed 1.0.
+        self.assertEqual(cfg.module.object_loss_weight, 0.0)
+        # The warm-up block must instantiate to the callback the experiment appends.
+        cb = hydra.utils.instantiate(cfg.object_loss_weight_anneal)
+        self.assertIsInstance(cb, ObjectLossWeightAnneal)
+        self.assertEqual(cfg.object_loss_weight_anneal.start, cfg.module.object_loss_weight)
 
     def test_direct_z_ablation_flag_reaches_the_object_branch(self):
         cfg, net = _instantiate_net("imlam_direct_z_dmw_stage_1")

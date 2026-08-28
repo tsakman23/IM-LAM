@@ -334,5 +334,31 @@ class SLAPOIDMModuleGradDiagnosticsTest(unittest.TestCase):
         self.assertNotIn("reconstruction_loss_object_grad_norm", step_dict.keys())
 
 
+class ObjectLossWeightBufferTest(unittest.TestCase):
+    """object_loss_weight must be a mutable tensor buffer, not a Python float, so an annealing
+    callback can ramp it in-place without triggering a torch.compile recompile every step."""
+
+    def test_object_loss_weight_is_a_non_persistent_buffer(self):
+        module = _make_module(object_dual_loss=True, object_loss_weight=1.0)
+        self.assertIsInstance(module.object_loss_weight, torch.Tensor)
+        self.assertIn("object_loss_weight", dict(module.named_buffers()))
+        # Non-persistent: it is re-derived from config (or every step by the anneal callback from
+        # global_step), so it must stay OUT of the checkpoint - otherwise adding it would break a
+        # strict resume of any Stage-1 checkpoint saved before this buffer existed.
+        self.assertNotIn("object_loss_weight", module.state_dict())
+
+    def test_in_place_mutation_changes_the_dual_loss(self):
+        # L_A = (1 + 4)/2 = 2.5 ; L_O = 16/1 = 16.0 ; recon = L_A + w * L_O.
+        module = _make_module(object_dual_loss=True, object_loss_weight=1.0)
+        batch = _make_batch(agent_frame=[[1, 1], [0, 0]], object_frame=[[0, 0], [0, 1]])
+
+        d1 = module._forward(batch, batch_idx=0, batch_len=2, prefix="train")
+        self.assertAlmostEqual(d1["reconstruction_loss"].item(), 2.5 + 1.0 * 16.0, places=5)
+
+        module.object_loss_weight.fill_(0.25)  # exactly what the anneal callback does
+        d2 = module._forward(batch, batch_idx=0, batch_len=2, prefix="train")
+        self.assertAlmostEqual(d2["reconstruction_loss"].item(), 2.5 + 0.25 * 16.0, places=5)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,3 +1,4 @@
+import torch
 from tensordict import TensorDict
 
 from ifo.common.nets.mask_biased_attention import MaskBiasedAttention
@@ -34,6 +35,46 @@ class ExtractionBetaAnneal:
             beta = getattr(module, "beta", None)
             if isinstance(module, MaskBiasedAttention) and beta is not None and not beta.requires_grad:
                 beta.data.fill_(value)
+
+
+class ObjectLossWeightAnneal:
+    """Warm up the dual loss's object term: hold ``object_loss_weight`` at ``start`` for ``hold_steps``,
+    then ramp it linearly to ``end`` over ``anneal_steps``, then hold at ``end``.
+
+    Applying the full ``lambda_o`` from step 0 lets the dual loss's amplified small-object gradient hit
+    the latent-injection pathway before the agent branch and the latent ``z`` have settled, which drives
+    a latent-scale runaway in IM-LAM (the action decoder's NMSE explodes). Warming the object term up -
+    typically from ``start=0`` (object branch dormant) - lets the agent pathway stabilize first, closer
+    to the stable union-loss regime, before the object budget is introduced.
+
+    Operates only on the module's ``object_loss_weight`` BUFFER (a scalar tensor); modules that store it
+    as a plain float, or not at all, are left untouched. Mutating the buffer in place is torch.compile
+    safe - the value is a graph input, not a guard - so no recompile is triggered as it ramps.
+    """
+
+    def __init__(self, start: float, end: float, anneal_steps: int, hold_steps: int = 0) -> None:
+        """Initialize the callback.
+
+        Args:
+            start (float): Weight during the hold window and at the start of the ramp (e.g. ``0.0``).
+            end (float): Weight held after the ramp (the target ``lambda_o``, e.g. ``1.0``).
+            anneal_steps (int): Steps over which the weight ramps linearly from ``start`` to ``end``.
+            hold_steps (int): Steps to hold at ``start`` before the ramp begins. Defaults to 0.
+        """
+        self.start, self.end = float(start), float(end)
+        self.anneal_steps, self.hold_steps = int(anneal_steps), int(hold_steps)
+
+    def train_batch_start(self, trainer: SupervisedTrainer, model, **kwargs) -> None:
+        """Set the (buffered) object_loss_weight to the annealed value for the current step."""
+        step = trainer.global_step
+        if step < self.hold_steps:
+            value = self.start
+        else:
+            frac = min(1.0, (step - self.hold_steps) / max(1, self.anneal_steps))
+            value = self.start + (self.end - self.start) * frac
+        weight = getattr(model, "object_loss_weight", None)
+        if isinstance(weight, torch.Tensor):
+            weight.fill_(value)
 
 
 class StopThresholdIOU:

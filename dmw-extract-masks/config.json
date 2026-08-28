@@ -1,0 +1,22 @@
+{
+  "_comment": "Provisional values. agent_bbox, object_prompt, and thresholds per task are tuned in Phase 4 (set_agent_bboxes.py for the fixed agent box; prompt/threshold sweeps against GT IoU). Masks are computed on observation_distracted (distracting Meta-World).",
+  "source_dataset_id": "tsakman23/visual_masked_distracting_metaworld",
+  "grounding_dino_model_id": "IDEA-Research/grounding-dino-base",
+  "sam2_model_id": "facebook/sam2-hiera-tiny",
+  "dtype": "bfloat16",
+  "observation_column": "observation_distracted",
+  "box_threshold": 0.3,
+  "text_threshold": 0.25,
+  "fallback_box_threshold": 0.15,
+  "fallback_text_threshold": 0.15,
+  "output_dir": "./datasets/dmw_sam",
+  "splits": ["train", "test"],
+  "save_interval": 500,
+  "max_frames_per_chunk": 500,
+  "tasks": {
+    "push-v3": {
+      "agent_bbox": [30, 15, 95, 115],
+      "object_prompt": "a puck. a red block."
+    }
+  }
+}

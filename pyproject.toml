@@ -30,7 +30,7 @@ dependencies = [
     "pypdl==1.5.4",
     "numpy==1.23.5",
     "setuptools<66",            # Needed to prevent 'DeprecationWarning: pkg_resources is deprecated as an API.' for pygame
-    "safetensors==0.7.0",
+    "safetensors==0.8.0",       # bumped from 0.7.0: transformers 5.16.1 (mask extraction, [masks] extra) needs >=0.8.0; ifo verified importing/loading under 0.8.0
     "decorator==4.0.2",         # Needed to prevent Moviepy errors. E.g. TypeError: must be real number, not NoneType
     # They plan to fix it in a future version, see https://github.com/pygame/pygame/pull/4583
 ]
@@ -38,6 +38,9 @@ dependencies = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
+# SAM2 + Grounding DINO out-of-the-box mask extraction for DMW (dmw-extract-masks/).
+# Zero-shot checkpoints only (no training). Verified against torch==2.8.0+cu128.
+masks = ["transformers==5.16.1", "tokenizers==0.23.1"]
 minigrid = ["minigrid==2.3.1"]
 vizdoom = ["vizdoom==1.2.4"]
 procgen = ["procgen==0.10.7"]

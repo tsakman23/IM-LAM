@@ -15,7 +15,7 @@
   "max_frames_per_chunk": 500,
   "tasks": {
     "push-v3": {
-      "agent_bbox": [30, 15, 95, 115],
+      "agent_bbox": [55, 3, 127, 127],
       "object_prompt": "a puck. a red block."
     }
   }

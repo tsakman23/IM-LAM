@@ -115,7 +115,11 @@ def run_worker(task, split, config, device="cuda:0", source=None, max_episodes=N
     obs_col = cfg["observation_column"]
     ds, orig_columns, image_columns = _open_source(config, cfg, task, split, source)
 
-    detector = GroundingDinoDetector(cfg["grounding_dino_model_id"], device)
+    detector = GroundingDinoDetector(
+        cfg["grounding_dino_model_id"], device,
+        object_region=cfg.get("object_region"),
+        object_max_box_area=cfg.get("object_max_box_area"),
+    )
     predictor = Sam2DualPredictor(
         cfg["sam2_model_id"], device, get_torch_dtype(cfg.get("dtype", "bfloat16"))
     )

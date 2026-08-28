@@ -18,6 +18,33 @@ def select_best_box(boxes, scores) -> Optional[list]:
     return boxes[int(np.argmax(scores))].tolist()
 
 
+def select_object_box(boxes, scores, region=None, max_area=None):
+    """Highest-scoring box subject to a workspace prior: keep only candidates
+    whose center lies inside ``region`` (xyxy) and whose area is <= ``max_area``.
+    Returns the surviving top-1 box as a list, or None if none survive.
+
+    This encodes that the manipulated object is small and on the table, which
+    rejects the two open-vocabulary failure modes seen on DMW: latching onto the
+    large arm (too big) or a same-colored background distractor (off-table)."""
+    scores = np.asarray(scores, dtype=float)
+    if scores.shape[0] == 0:
+        return None
+    boxes = np.asarray(boxes, dtype=float)
+    keep = np.ones(scores.shape[0], dtype=bool)
+    if region is not None:
+        cx = (boxes[:, 0] + boxes[:, 2]) / 2.0
+        cy = (boxes[:, 1] + boxes[:, 3]) / 2.0
+        rx0, ry0, rx1, ry1 = region
+        keep &= (cx >= rx0) & (cx <= rx1) & (cy >= ry0) & (cy <= ry1)
+    if max_area is not None:
+        area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        keep &= area <= max_area
+    if not keep.any():
+        return None
+    idx = np.where(keep)[0]
+    return boxes[idx[int(np.argmax(scores[idx]))]].tolist()
+
+
 def detect_with_fallback(
     detect_fn: Callable,
     frame,
@@ -44,10 +71,16 @@ class GroundingDinoDetector:
     """Thin wrapper around a HF zero-shot object detector. Loads the checkpoint
     lazily in ``__init__`` so importing this module stays cheap for unit tests."""
 
-    def __init__(self, model_id: str, device: str, dtype=None):
+    def __init__(self, model_id: str, device: str, dtype=None,
+                 object_region=None, object_max_box_area=None):
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
         self.device = device
+        # Workspace prior for object detection (both optional): keep only detections
+        # whose center is in `object_region` (xyxy px) and whose box area <=
+        # `object_max_box_area` (px). None disables that constraint.
+        self.object_region = object_region
+        self.object_max_box_area = object_max_box_area
         self.processor = AutoProcessor.from_pretrained(model_id)
         model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id)
         if dtype is not None:
@@ -73,8 +106,9 @@ class GroundingDinoDetector:
             text_threshold=text_threshold,
             target_sizes=[frame.size[::-1]],  # (H, W)
         )[0]
-        return select_best_box(
-            results["boxes"].cpu().numpy(), results["scores"].cpu().numpy()
+        return select_object_box(
+            results["boxes"].cpu().numpy(), results["scores"].cpu().numpy(),
+            region=self.object_region, max_area=self.object_max_box_area,
         )
 
     def detect_object(

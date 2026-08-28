@@ -1,6 +1,32 @@
 import numpy as np
 
-from detector import detect_with_fallback, select_best_box
+from detector import detect_with_fallback, select_best_box, select_object_box
+
+
+def test_select_object_box_no_filters_is_top1():
+    boxes = np.array([[0, 0, 4, 4], [10, 10, 14, 14]], dtype=np.float32)
+    scores = np.array([0.3, 0.7], dtype=np.float32)
+    assert select_object_box(boxes, scores) == [10.0, 10.0, 14.0, 14.0]
+
+
+def test_select_object_box_region_rejects_out_of_region_top_score():
+    # Top-scoring box's center is outside the workspace; the in-region one wins.
+    boxes = np.array([[0, 0, 4, 4], [50, 60, 60, 70]], dtype=np.float32)  # centers (2,2), (55,65)
+    scores = np.array([0.9, 0.5], dtype=np.float32)
+    assert select_object_box(boxes, scores, region=[40, 50, 80, 90]) == [50.0, 60.0, 60.0, 70.0]
+
+
+def test_select_object_box_max_area_rejects_large_box():
+    # Top-scoring box is huge (e.g. the arm); the small one wins.
+    boxes = np.array([[0, 0, 100, 100], [40, 40, 50, 50]], dtype=np.float32)  # areas 10000, 100
+    scores = np.array([0.9, 0.5], dtype=np.float32)
+    assert select_object_box(boxes, scores, max_area=2500) == [40.0, 40.0, 50.0, 50.0]
+
+
+def test_select_object_box_returns_none_when_no_candidate_survives():
+    boxes = np.array([[0, 0, 4, 4]], dtype=np.float32)  # center (2,2) outside region
+    scores = np.array([0.9], dtype=np.float32)
+    assert select_object_box(boxes, scores, region=[40, 50, 80, 90]) is None
 
 
 def test_select_best_box_returns_none_when_no_detections():

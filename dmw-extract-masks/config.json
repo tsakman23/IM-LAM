@@ -9,6 +9,8 @@
   "text_threshold": 0.25,
   "fallback_box_threshold": 0.15,
   "fallback_text_threshold": 0.15,
+  "object_region": [35, 55, 110, 100],
+  "object_max_box_area": 2500,
   "output_dir": "./datasets/dmw_sam",
   "splits": ["train", "test"],
   "save_interval": 500,
@@ -17,6 +19,26 @@
     "push-v3": {
       "agent_bbox": [55, 3, 127, 127],
       "object_prompt": "a puck. a red block."
+    },
+    "handle-pull-v3": {
+      "agent_bbox": [37, 3, 127, 127],
+      "object_prompt": "a red handle. a red bar. a red block."
+    },
+    "peg-insert-side-v3": {
+      "agent_bbox": [24, 3, 127, 127],
+      "object_prompt": "a green peg. a green rod. a peg."
+    },
+    "dial-turn-v3": {
+      "agent_bbox": [48, 3, 127, 127],
+      "object_prompt": "a dial. a knob. a small dark object."
+    },
+    "sweep-into-v3": {
+      "agent_bbox": [55, 3, 127, 127],
+      "object_prompt": "a brown cylinder. a brown puck."
+    },
+    "pick-place-v3": {
+      "agent_bbox": [59, 3, 127, 127],
+      "object_prompt": "a red cube. a red block. a puck."
     }
   }
 }

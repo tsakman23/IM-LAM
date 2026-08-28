@@ -42,7 +42,11 @@ def main(task="push-v3", n_episodes=6, split="train", device="cuda:0"):
     ds = load_dataset("parquet", data_files=_source(task, split), split="train", streaming=True)
     orig_columns = list(ds.features.keys())
 
-    detector = GroundingDinoDetector(cfg["grounding_dino_model_id"], device)
+    detector = GroundingDinoDetector(
+        cfg["grounding_dino_model_id"], device,
+        object_region=cfg.get("object_region"),
+        object_max_box_area=cfg.get("object_max_box_area"),
+    )
     predictor = Sam2DualPredictor(cfg["sam2_model_id"], device, get_torch_dtype(cfg["dtype"]))
 
     out_dir = f"/data2/masklam/results/dmw_sam/{task}"

@@ -2,8 +2,32 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+from ifo.common.transforms.data import ProcessMask, get_dataset_transform, metaworld
 from ifo.common.utils.data import build_mask_columns
 from ifo.modules.slapo.utils import apply_mask_source
+
+
+def test_metaworld_transform_gt_excludes_pred_masks():
+    dt = metaworld(with_object_mask=True, mask_source="gt")
+    assert "pred_mask" not in dt.transform
+    assert "pred_object_mask" not in dt.transform
+
+
+def test_metaworld_transform_sam_processes_pred_masks_like_gt():
+    dt = metaworld(with_object_mask=True, mask_source="sam")
+    assert isinstance(dt.transform["pred_mask"], ProcessMask)
+    assert isinstance(dt.transform["pred_object_mask"], ProcessMask)
+
+
+def test_metaworld_transform_sam_agent_only_has_no_pred_object():
+    dt = metaworld(with_object_mask=False, mask_source="sam")
+    assert isinstance(dt.transform["pred_mask"], ProcessMask)
+    assert "pred_object_mask" not in dt.transform
+
+
+def test_get_dataset_transform_threads_mask_source_to_metaworld():
+    dt = get_dataset_transform("Meta-World/masked-MT1-push-v3", with_object_mask=True, mask_source="sam")
+    assert "pred_mask" in dt.transform and "pred_object_mask" in dt.transform
 
 
 def test_build_columns_gt_agent_only():

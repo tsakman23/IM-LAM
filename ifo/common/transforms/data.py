@@ -237,7 +237,7 @@ def dcs_masked() -> DictTransform:
 
 
 
-def metaworld(with_object_mask: bool = False, with_object_state: bool = False) -> DictTransform:
+def metaworld(with_object_mask: bool = False, with_object_state: bool = False, mask_source: str = "gt") -> DictTransform:
     """Apply dataset transformations for Meta-World environment.
 
     Args:
@@ -262,10 +262,18 @@ def metaworld(with_object_mask: bool = False, with_object_state: bool = False) -
         transforms["object_mask"] = ProcessMask()
     if with_object_state:
         transforms["object_state"] = ToDtype(torch.float32)
+    # mask_source="sam": predicted masks must receive the SAME ProcessMask as the
+    # GT masks, because apply_mask_source swaps them into mask/object_mask after the
+    # transform runs - so they have to already be in the processed (B,T,1,H,W) form.
+    if mask_source == "sam":
+        transforms["pred_mask"] = ProcessMask()
+        if with_object_mask:
+            transforms["pred_object_mask"] = ProcessMask()
     return DictTransform(transforms)
 
 def get_dataset_transform(
-    dataset_name: Optional[str], with_object_mask: bool = False, with_object_state: bool = False
+    dataset_name: Optional[str], with_object_mask: bool = False, with_object_state: bool = False,
+    mask_source: str = "gt",
 ) -> DictTransform:
     """Get dataset transformations for the specified dataset.
 
@@ -293,6 +301,6 @@ def get_dataset_transform(
         else:
             return dm_control()
     elif "Meta-World" in dataset_name:
-        return metaworld(with_object_mask=with_object_mask, with_object_state=with_object_state)
+        return metaworld(with_object_mask=with_object_mask, with_object_state=with_object_state, mask_source=mask_source)
     else:
         raise NotImplementedError("Dataset is currently not supported.")

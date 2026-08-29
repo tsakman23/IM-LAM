@@ -453,7 +453,7 @@ def get_dataset(
     Returns:
         Dataset: The dataset object.
     """
-    transform = get_dataset_transform(name, with_object_mask=with_object_mask, with_object_state=with_object_state)
+    transform = get_dataset_transform(name, with_object_mask=with_object_mask, with_object_state=with_object_state, mask_source=mask_source)
     if "dm_control" in name:
         if "masked" in name:
             return get_masked_distracting_control_suite_dataset(name, split, cache_dir, block_size, transform)

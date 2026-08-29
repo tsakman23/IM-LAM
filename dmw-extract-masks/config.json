@@ -11,7 +11,7 @@
   "fallback_text_threshold": 0.15,
   "object_region": [35, 55, 110, 100],
   "object_max_box_area": 2500,
-  "output_dir": "./datasets/dmw_sam",
+  "output_dir": "/data2/masklam/datasets/dmw_sam",
   "splits": ["train", "test"],
   "save_interval": 500,
   "max_frames_per_chunk": 500,

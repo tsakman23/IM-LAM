@@ -36,7 +36,12 @@ def _local_source(task, split):
     files = sorted(glob.glob(f"{_SNAP}/*/{task}/{split}-*.parquet"))
     if not files:
         raise SystemExit(f"--source-local: no cached parquet for {task}/{split}")
-    return files
+    # The HF cache may hold several snapshot dirs, each with the SAME shard files;
+    # dedupe by shard basename so we don't process the data multiple times.
+    unique = {}
+    for f in files:
+        unique.setdefault(os.path.basename(f), f)
+    return sorted(unique.values())
 
 
 def main():
@@ -46,8 +51,11 @@ def main():
     ap.add_argument("--splits", nargs="+", default=["train", "test"])
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--max-episodes", type=int, default=None, help="cap episodes per split (debug)")
+    ap.add_argument("--source-root", default=None, metavar="ROOT",
+                    help="RECOMMENDED: read a staged save_to_disk copy at ROOT/<task>/<split> "
+                         "(fast local read, no hub streaming; stage with scripts/save_local_dataset.py)")
     ap.add_argument("--source-local", action="store_true",
-                    help="read cached parquet instead of streaming the hub")
+                    help="read the HF cache's parquet shards (deduped across snapshots) instead of streaming")
     ap.add_argument("--save-local", default=None, metavar="ROOT",
                     help="consolidate shards to ROOT/<task>/<split> via save_to_disk "
                          "(loadable by ifo get_metaworld_dataset with a local path)")
@@ -58,7 +66,14 @@ def main():
     resolve_task_config(config, args.task)  # fail fast if the task is unconfigured
 
     for split in args.splits:
-        source = _local_source(args.task, split) if args.source_local else None
+        if args.source_root:
+            source = os.path.join(args.source_root, args.task, split)
+            if not os.path.isdir(source):
+                raise SystemExit(f"--source-root: {source} not found; stage it with scripts/save_local_dataset.py")
+        elif args.source_local:
+            source = _local_source(args.task, split)
+        else:
+            source = None
         stats = run_worker(args.task, split, config, device=args.device,
                            source=source, max_episodes=args.max_episodes)
         print(f"[{args.task}/{split}] episodes={stats['episodes']} frames={stats['frames']} "

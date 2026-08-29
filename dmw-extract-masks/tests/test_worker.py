@@ -5,7 +5,36 @@ column pass-through (the no-regeneration invariant) are tested in isolation.
 import numpy as np
 from PIL import Image
 
-from worker import extract_episode, iter_episodes
+import pytest
+
+from worker import extract_episode, iter_episodes, partition_shards, prefetch_iter
+
+
+def test_prefetch_iter_yields_all_items_in_order():
+    assert list(prefetch_iter(range(10), buffer_size=3)) == list(range(10))
+
+
+def test_prefetch_iter_works_with_small_buffer():
+    assert list(prefetch_iter(iter([7, 8, 9]), buffer_size=1)) == [7, 8, 9]
+
+
+def test_prefetch_iter_propagates_producer_error():
+    def gen():
+        yield 1
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        list(prefetch_iter(gen(), buffer_size=2))
+
+
+def test_partition_shards_round_robin_splits_across_ranks():
+    shards = [f"s{i}" for i in range(7)]
+    assert partition_shards(shards, rank=0, world_size=2) == ["s0", "s2", "s4", "s6"]
+    assert partition_shards(shards, rank=1, world_size=2) == ["s1", "s3", "s5"]
+
+
+def test_partition_shards_single_worker_returns_all():
+    assert partition_shards(["a", "b", "c"], rank=0, world_size=1) == ["a", "b", "c"]
 
 _CFG = {
     "object_prompt": "a puck.",

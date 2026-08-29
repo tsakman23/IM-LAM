@@ -11,12 +11,51 @@ reads existing frames (the no-regeneration invariant).
 import io
 import logging
 import os
+import queue
+import threading
 from typing import Iterator
 
 import numpy as np
 import PIL.Image
 
 logger = logging.getLogger("dmw-extract-masks.worker")
+
+
+def prefetch_iter(iterable, buffer_size: int = 4):
+    """Yield items from ``iterable`` produced on a background thread, so the
+    consumer's GPU work overlaps the producer's I/O (streaming + image decode).
+    A bounded queue applies backpressure; producer exceptions are re-raised in
+    the consumer. This is the key fix for an I/O-starved GPU: the extractor's
+    GPU is otherwise idle while each episode is fetched and decoded serially."""
+    q: queue.Queue = queue.Queue(maxsize=buffer_size)
+    done = object()
+    err: list = []
+
+    def _produce():
+        try:
+            for item in iterable:
+                q.put(item)
+        except Exception as exc:  # surface to the consumer instead of dying silently
+            err.append(exc)
+        finally:
+            q.put(done)
+
+    thread = threading.Thread(target=_produce, daemon=True)
+    thread.start()
+    while True:
+        item = q.get()
+        if item is done:
+            break
+        yield item
+    thread.join()
+    if err:
+        raise err[0]
+
+
+def partition_shards(shards: list, rank: int, world_size: int) -> list:
+    """Round-robin slice of ``shards`` for worker ``rank`` of ``world_size``.
+    Lets one process per GPU cover a disjoint, balanced set of shards."""
+    return shards[rank::world_size]
 
 
 def iter_episodes(rows, term_col: str = "terminated", trunc_col: str = "truncated") -> Iterator[list]:
@@ -85,21 +124,38 @@ def write_shard(rows_dict: dict, shard_path: str, image_columns) -> None:
 
 
 def _open_source(config, cfg, task, split, source):
-    """Return a streaming iterable of rows for (task, split). ``source`` may be a
-    list/glob of local parquet files; otherwise the configured hub dataset is
-    streamed. Returns ``(dataset, orig_columns, image_columns)``."""
-    from datasets import Image as ImageFeature
-    from datasets import load_dataset
+    """Return ``(dataset, orig_columns, image_columns, num_frames)`` for (task, split).
 
-    if source is not None:
-        ds = load_dataset("parquet", data_files=source, split="train", streaming=True)
-    else:
+    ``source`` may be:
+      - None                -> stream the configured hub dataset;
+      - a directory path    -> a staged ``save_to_disk`` copy (load_from_disk, local, fast);
+      - a list of parquet files -> stream those parquet files.
+    ``num_frames`` (for the progress-bar ETA) is exact for local sources and
+    best-effort (metadata) for the hub.
+    """
+    from datasets import Image as ImageFeature
+
+    if source is None:
+        from datasets import load_dataset
         ds = load_dataset(cfg["source_dataset_id"], name=task, split=split, streaming=True)
+        try:
+            from datasets import load_dataset_builder
+            num_frames = load_dataset_builder(cfg["source_dataset_id"], name=task).info.splits[split].num_examples
+        except Exception:
+            num_frames = None
+    elif isinstance(source, str):
+        from datasets import load_from_disk
+        ds = load_from_disk(source)
+        num_frames = len(ds)
+    else:
+        import pyarrow.parquet as pq
+        from datasets import load_dataset
+        ds = load_dataset("parquet", data_files=source, split="train", streaming=True)
+        num_frames = sum(pq.ParquetFile(f).metadata.num_rows for f in source)
 
     features = ds.features
-    orig_columns = list(features.keys())
     image_columns = [c for c, f in features.items() if isinstance(f, ImageFeature)]
-    return ds, orig_columns, image_columns
+    return ds, list(features.keys()), image_columns, num_frames
 
 
 def run_worker(task, split, config, device="cuda:0", source=None, max_episodes=None):
@@ -113,7 +169,7 @@ def run_worker(task, split, config, device="cuda:0", source=None, max_episodes=N
 
     cfg = resolve_task_config(config, task)
     obs_col = cfg["observation_column"]
-    ds, orig_columns, image_columns = _open_source(config, cfg, task, split, source)
+    ds, orig_columns, image_columns, total_frames = _open_source(config, cfg, task, split, source)
 
     detector = GroundingDinoDetector(
         cfg["grounding_dino_model_id"], device,
@@ -144,20 +200,32 @@ def run_worker(task, split, config, device="cuda:0", source=None, max_episodes=N
         shard_idx += 1
         accum = {c: [] for c in accum}
 
-    for episode_rows in iter_episodes(ds, config.get("terminated_column", "terminated"),
-                                      config.get("truncated_column", "truncated")):
+    from tqdm.auto import tqdm
+
+    episode_stream = iter_episodes(ds, config.get("terminated_column", "terminated"),
+                                   config.get("truncated_column", "truncated"))
+    # Prefetch overlaps streaming+decode (producer thread) with GPU inference
+    # (this loop), so the otherwise-idle GPU stays fed.
+    pbar = tqdm(total=total_frames, unit="frame", desc=f"{task}/{split}", dynamic_ncols=True)
+    for episode_rows in prefetch_iter(episode_stream, buffer_size=config.get("prefetch_buffer", 4)):
         out, meta = extract_episode(episode_rows, detector, predictor, cfg, obs_col, orig_columns)
         for col in accum:
             accum[col].extend(out[col])
         episodes += 1
         detected += int(meta["detected"])
         frames += meta["n_frames"]
-        logger.info("episode %d: %d frames, object detected=%s", episodes, meta["n_frames"], meta["detected"])
+        # Log only failures; successes are summarized by the progress bar.
+        if not meta["detected"]:
+            logger.warning("%s/%s episode %d: object NOT detected (empty object mask)",
+                           task, split, episodes)
+        pbar.update(meta["n_frames"])
+        pbar.set_postfix(ep=episodes, det=f"{detected}/{episodes}", refresh=False)
         if episodes % save_interval == 0:
             flush()
         if max_episodes is not None and episodes >= max_episodes:
             break
 
+    pbar.close()
     flush()
     return {
         "episodes": episodes,

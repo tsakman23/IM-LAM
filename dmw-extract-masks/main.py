@@ -60,10 +60,26 @@ def main():
                     help="consolidate shards to ROOT/<task>/<split> via save_to_disk "
                          "(loadable by ifo get_metaworld_dataset with a local path)")
     ap.add_argument("--push-to-hub", default=None, metavar="REPO")
+    ap.add_argument("--push-only", action="store_true",
+                    help="skip extraction; push the already-generated save_to_disk copy "
+                         "(from --save-local ROOT/<task>/<split>) to --push-to-hub. No GPU.")
     args = ap.parse_args()
 
     config = json.load(open(args.config))
     resolve_task_config(config, args.task)  # fail fast if the task is unconfigured
+
+    if args.push_only:
+        if not (args.save_local and args.push_to_hub):
+            raise SystemExit("--push-only requires --save-local (source) and --push-to-hub (target)")
+        from datasets import load_from_disk
+        for split in args.splits:
+            src = os.path.join(args.save_local, args.task, split)
+            if not os.path.isdir(src):
+                raise SystemExit(f"--push-only: {src} not found (generate it first with --save-local)")
+            print(f"[{args.task}/{split}] pushing {src} -> {args.push_to_hub} ...")
+            load_from_disk(src).push_to_hub(args.push_to_hub, config_name=args.task, split=split)
+            print(f"[{args.task}/{split}] pushed.")
+        return
 
     for split in args.splits:
         if args.source_root:

@@ -39,6 +39,11 @@
     "pick-place-v3": {
       "agent_bbox": [59, 3, 127, 127],
       "object_prompt": "a red cube. a red block. a puck."
+    },
+    "door-open-v3": {
+      "agent_bbox": [30, 3, 127, 127],
+      "object_prompt": "a black box. a dark cabinet. a door.",
+      "object_box_offset": [14, 5, 16, 0]
     }
   }
 }

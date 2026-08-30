@@ -45,6 +45,20 @@ def select_object_box(boxes, scores, region=None, max_area=None):
     return boxes[idx[int(np.argmax(scores[idx]))]].tolist()
 
 
+def apply_box_offset(box, offset, width, height):
+    """Add a per-edge offset ``[dx0, dy0, dx1, dy1]`` to a detected box, clamped to
+    the image. Used for objects whose GT extent is a consistent geometric sub-region
+    of what the open-vocab detector boxes (e.g. door-open: the hinged door+handle is
+    the detected cabinet shifted right and down). None offset / None box are no-ops."""
+    if box is None or not offset or not any(offset):
+        return box
+    x0 = min(max(box[0] + offset[0], 0), width)
+    y0 = min(max(box[1] + offset[1], 0), height)
+    x1 = min(max(box[2] + offset[2], 0), width)
+    y1 = min(max(box[3] + offset[3], 0), height)
+    return [x0, y0, x1, y1]
+
+
 def detect_with_fallback(
     detect_fn: Callable,
     frame,
@@ -72,7 +86,7 @@ class GroundingDinoDetector:
     lazily in ``__init__`` so importing this module stays cheap for unit tests."""
 
     def __init__(self, model_id: str, device: str, dtype=None,
-                 object_region=None, object_max_box_area=None):
+                 object_region=None, object_max_box_area=None, object_box_offset=None):
         from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
         self.device = device
@@ -81,6 +95,9 @@ class GroundingDinoDetector:
         # `object_max_box_area` (px). None disables that constraint.
         self.object_region = object_region
         self.object_max_box_area = object_max_box_area
+        # Optional per-edge offset [dx0,dy0,dx1,dy1] applied to the selected box
+        # (e.g. door-open: cabinet box -> door+handle box). None = no-op.
+        self.object_box_offset = object_box_offset
         self.processor = AutoProcessor.from_pretrained(model_id)
         model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id)
         if dtype is not None:
@@ -106,10 +123,12 @@ class GroundingDinoDetector:
             text_threshold=text_threshold,
             target_sizes=[frame.size[::-1]],  # (H, W)
         )[0]
-        return select_object_box(
+        box = select_object_box(
             results["boxes"].cpu().numpy(), results["scores"].cpu().numpy(),
             region=self.object_region, max_area=self.object_max_box_area,
         )
+        w, h = frame.size
+        return apply_box_offset(box, self.object_box_offset, w, h)
 
     def detect_object(
         self,

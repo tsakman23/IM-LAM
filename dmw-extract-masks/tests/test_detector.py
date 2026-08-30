@@ -1,6 +1,26 @@
 import numpy as np
 
-from detector import detect_with_fallback, select_best_box, select_object_box
+from detector import apply_box_offset, detect_with_fallback, select_best_box, select_object_box
+
+
+def test_apply_box_offset_none_offset_is_noop():
+    assert apply_box_offset([10, 10, 20, 20], None, 128, 128) == [10, 10, 20, 20]
+    assert apply_box_offset([10, 10, 20, 20], [0, 0, 0, 0], 128, 128) == [10, 10, 20, 20]
+
+
+def test_apply_box_offset_shifts_each_edge():
+    # dx0, dy0, dx1, dy1 added to the corresponding edges (used to turn a detected
+    # cabinet box into the door+handle box on door-open).
+    assert apply_box_offset([29, 45, 72, 81], [14, 5, 16, 0], 128, 128) == [43, 50, 88, 81]
+
+
+def test_apply_box_offset_clamps_to_image_bounds():
+    assert apply_box_offset([120, 120, 125, 125], [0, 0, 20, 20], 128, 128) == [120, 120, 128, 128]
+    assert apply_box_offset([5, 5, 20, 20], [-10, -10, 0, 0], 128, 128) == [0, 0, 20, 20]
+
+
+def test_apply_box_offset_none_box_returns_none():
+    assert apply_box_offset(None, [14, 5, 16, 0], 128, 128) is None
 
 
 def test_select_object_box_no_filters_is_top1():

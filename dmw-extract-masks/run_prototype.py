@@ -46,6 +46,7 @@ def main(task="push-v3", n_episodes=6, split="train", device="cuda:0"):
         cfg["grounding_dino_model_id"], device,
         object_region=cfg.get("object_region"),
         object_max_box_area=cfg.get("object_max_box_area"),
+        object_box_offset=cfg.get("object_box_offset"),
     )
     predictor = Sam2DualPredictor(cfg["sam2_model_id"], device, get_torch_dtype(cfg["dtype"]))
 

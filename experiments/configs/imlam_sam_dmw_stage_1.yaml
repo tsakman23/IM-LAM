@@ -1,0 +1,27 @@
+# IM-LAM (Interaction-Masked Latent Action Model) - Stage 1, SAM-mask arm.
+#
+# Identical to imlam_dmw_stage_1 (same IMLAMIDM net, union object_mask_loss) EXCEPT the
+# Stage-1 FDM reconstruction loss is gated by the PREDICTED masks (SAM2 + Grounding-DINO,
+# columns pred_mask/pred_object_mask) instead of the ground-truth simulator masks - the
+# @SAM robustness arm to compare against the GT (@GT) baseline on identical frames.
+#
+# Requires a SUPERSET dataset that carries pred_mask/pred_object_mask alongside the GT
+# masks (produced by dmw-extract-masks). Point dataset.dataset_path at it, e.g.:
+#   - local save_to_disk copy: /data2/masklam/datasets/dmw_sam_local  (or stage to /tmp)
+#   - HF repo:                 tsakman23/visual_masked_distracting_metaworld_sam
+#
+# mask_source="sam" is a non-destructive selector: GT masks are still loaded (so IoU
+# diagnostics remain available), but mask/object_mask that gate the loss are sourced
+# from pred_mask/pred_object_mask. Stages 2/3 are unchanged (they do not read masks).
+defaults:
+  - imlam_dmw_stage_1
+  - _self_
+
+module:
+  # Swap the FDM's loss-gating masks from GT to the predicted SAM2/Grounding-DINO masks.
+  mask_source: sam
+
+dataset:
+  # Load pred_mask/pred_object_mask alongside the GT masks (non-destructive) and apply
+  # the same ProcessMask to them, so apply_mask_source can select them in the module.
+  mask_source: sam

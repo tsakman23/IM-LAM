@@ -53,7 +53,7 @@ TASK_CHECKPOINTS = {
     "handle-pull-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_handle-pull_union_seed1-retry-1/step-000031248.ckpt"),
     "push-v3":        ("imlam_dmw_stage_1", "checkpoints/im-lam_push_union_seed1-1/step-000031248.ckpt"),
     "sweep-into-v3":  ("imlam_dmw_stage_1", "checkpoints/im-lam_sweep-into_union_seed2-1/step-000031248.ckpt"),
-    # TODO: pick-place-v3 / peg-insert-side-v3: no IM-LAM checkpoint yet.
+    # TODO: pick-place-v3 / peg-insert-side-v3.
 }
 
 

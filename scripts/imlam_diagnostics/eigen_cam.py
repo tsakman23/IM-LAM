@@ -64,9 +64,9 @@ def eigen_cam(activation):
 # trained weights differ. door-open has no plain MaskLAM checkpoint, so it's FG-union/FG-dual/IM-LAM.
 COMPARE_MODELS = {
     "door-open-v3": [
-        ("FG-union", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_door-open_seed3-1/step-000031248.ckpt"),
-        ("FG-dual",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_door-open_seed3-1/step-000031248.ckpt"),
-        ("IM-LAM",   "imlam_dmw_stage_1",                   "checkpoints/im-lam_door-open_union_seed3-1/step-000031248.ckpt"),
+        ("FG-union", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_door-open_seed2-1/step-000015000.ckpt"),
+        ("FG-dual",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_door-open_seed2-1/step-000031248.ckpt"),
+        ("IM-LAM",   "imlam_dmw_stage_1",                   "checkpoints/im-lam_door-open_union_seed2-1/step-000031248.ckpt"),
     ],
 }
 

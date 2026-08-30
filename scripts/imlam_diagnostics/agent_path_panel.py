@@ -50,10 +50,11 @@ MODES = ["normal", "no_transition", "shuffled"]
 # --config-name. Populated with the checkpoints that exist so far; extend as experiments finish.
 TASK_CHECKPOINTS = {
     "door-open-v3":   ("imlam_dmw_stage_1", "checkpoints/im-lam_door-open_union_seed2-1/step-000031248.ckpt"),
-    "handle-pull-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_handle-pull_union_seed1-retry-1/step-000031248.ckpt"),
-    "push-v3":        ("imlam_dmw_stage_1", "checkpoints/im-lam_push_union_seed1-1/step-000031248.ckpt"),
+    "handle-pull-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_handle-pull_union_seed2_retry5-1/step-000025000.ckpt"),
+    "push-v3":        ("imlam_dmw_stage_1", "checkpoints/im-lam_push_union_seed2-1/step-000031248.ckpt"),
     "sweep-into-v3":  ("imlam_dmw_stage_1", "checkpoints/im-lam_sweep-into_union_seed2-1/step-000031248.ckpt"),
-    # TODO: pick-place-v3 / peg-insert-side-v3.
+    "pick-place-v3":  ("imlam_dmw_stage_1", "checkpoints/im-lam_pick-place_union_seed2_retry5-1/step-000031248.ckpt"),
+    "peg-insert-side-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_peg-insert-side_union_seed2_retry-1/step-000020000.ckpt"),
 }
 
 

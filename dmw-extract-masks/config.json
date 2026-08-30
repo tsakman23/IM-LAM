@@ -28,10 +28,6 @@
       "agent_bbox": [24, 3, 127, 127],
       "object_prompt": "a green peg. a green rod. a peg."
     },
-    "dial-turn-v3": {
-      "agent_bbox": [48, 3, 127, 127],
-      "object_prompt": "a dial. a knob. a small dark object."
-    },
     "sweep-into-v3": {
       "agent_bbox": [55, 3, 127, 127],
       "object_prompt": "a brown cylinder. a brown puck."

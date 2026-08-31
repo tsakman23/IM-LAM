@@ -34,14 +34,12 @@ _SNAP = ("/data2/masklam/datasets/hf_home/hub/"
 
 def _local_source(task, split):
     files = sorted(glob.glob(f"{_SNAP}/*/{task}/{split}-*.parquet"))
-    if not files:
-        raise SystemExit(f"--source-local: no cached parquet for {task}/{split}")
     # The HF cache may hold several snapshot dirs, each with the SAME shard files;
     # dedupe by shard basename so we don't process the data multiple times.
     unique = {}
     for f in files:
         unique.setdefault(os.path.basename(f), f)
-    return sorted(unique.values())
+    return sorted(unique.values())  # may be empty if the split isn't cached
 
 
 def main():
@@ -81,17 +79,24 @@ def main():
             print(f"[{args.task}/{split}] pushed.")
         return
 
+    processed = 0
     for split in args.splits:
         if args.source_root:
             source = os.path.join(args.source_root, args.task, split)
             if not os.path.isdir(source):
-                raise SystemExit(f"--source-root: {source} not found; stage it with scripts/save_local_dataset.py")
+                logging.warning("skipping %s/%s: --source-root %s not found "
+                                "(stage it with scripts/save_local_dataset.py)", args.task, split, source)
+                continue
         elif args.source_local:
             source = _local_source(args.task, split)
+            if not source:
+                logging.warning("skipping %s/%s: no cached parquet found", args.task, split)
+                continue
         else:
             source = None
         stats = run_worker(args.task, split, config, device=args.device,
                            source=source, max_episodes=args.max_episodes)
+        processed += 1
         print(f"[{args.task}/{split}] episodes={stats['episodes']} frames={stats['frames']} "
               f"object_detection_rate={stats['detection_rate']:.3f} shards={len(stats['shards'])}")
 
@@ -105,6 +110,9 @@ def main():
             Dataset.from_parquet(stats["shards"]).push_to_hub(
                 args.push_to_hub, config_name=args.task, split=split)
             print(f"[{args.task}/{split}] pushed -> {args.push_to_hub} ({args.task}/{split})")
+
+    if processed == 0:
+        raise SystemExit(f"{args.task}: no splits were processed (all requested sources missing)")
 
 
 if __name__ == "__main__":

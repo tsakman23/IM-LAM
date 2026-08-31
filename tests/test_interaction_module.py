@@ -199,6 +199,20 @@ class EntityExtractionTest(unittest.TestCase):
             a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
         self.assertTrue(torch.isfinite(a_t).all() and torch.isfinite(o_t).all())
 
+    def test_extract_returns_per_head_attention_when_requested(self):
+        # For the extraction-footprint diagnostic: the mask-biased attention weights of each read-out.
+        a_t, o_t, attn_a, attn_o = self.module.extract(self.b_t, self.w_a, self.w_o, return_attn=True)
+        self.assertEqual(tuple(a_t.shape), (self.b, self.n, self.dim))
+        self.assertEqual(tuple(o_t.shape), (self.b, self.n, self.dim))
+        for attn in (attn_a, attn_o):
+            self.assertEqual(tuple(attn.shape), (self.b, self.heads, self.n, self.n))  # (B, heads, Nq, Nk)
+            self.assertTrue(torch.allclose(attn.sum(-1), torch.ones(self.b, self.heads, self.n), atol=1e-4))
+
+    def test_return_attn_does_not_change_the_readouts(self):
+        a_t, o_t = self.module.extract(self.b_t, self.w_a, self.w_o)
+        a_t2, o_t2, _, _ = self.module.extract(self.b_t, self.w_a, self.w_o, return_attn=True)
+        self.assertTrue(torch.allclose(a_t, a_t2) and torch.allclose(o_t, o_t2))
+
 
 class AgentDynamicsTest(unittest.TestCase):
     def setUp(self):

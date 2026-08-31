@@ -393,16 +393,18 @@ class IMLAMIDM(SLAPOIDM):
             "proj_o_norm": interaction.proj_o.weight.detach().norm(),
         }
 
-    def extract_entities(self, x: Tensor, mask: Tensor, object_mask: Tensor):
+    def extract_entities(self, x: Tensor, mask: Tensor, object_mask: Tensor, return_attn: bool = False):
         """Object-dynamics-probe features: the FDM's ``(A_t, O_t)`` bottleneck read-outs. Mirrors the FDM
         input path of :meth:`forward` (``c+2`` current stack, current-frame masks) but stops at extraction.
         Returns two ``(B, N, dim)`` token sets. Use under ``torch.no_grad`` for a frozen-model probe.
+        With ``return_attn`` also returns each read-out's ``(B, num_heads, N, N)`` extraction attention (for
+        the extraction-footprint diagnostic).
         """
         fdm_observation = torch.cat([x, mask, object_mask], dim=-3)
         fdm_current = merge_tc(fdm_observation[:, :self.frame_stack])
         agent_mask_t = mask[:, self.frame_stack - 1]
         object_mask_t = object_mask[:, self.frame_stack - 1]
-        return self.decoder.extract_entities(fdm_current, agent_mask_t, object_mask_t)
+        return self.decoder.extract_entities(fdm_current, agent_mask_t, object_mask_t, return_attn=return_attn)
 
     def probe_features(self, x: Tensor, mask: Tensor, object_mask: Tensor) -> Tuple[Tensor, Tensor]:
         """IM-LAM override: mean-pool the interaction read-outs ``(A_t, O_t)`` over tokens -> ``(B, dim)``."""

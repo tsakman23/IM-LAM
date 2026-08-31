@@ -315,7 +315,7 @@ class InteractionModule(nn.Module):
         """(B, dim, H', W') -> (B, N, dim)."""
         return spatial.flatten(2).transpose(1, 2)
 
-    def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
+    def extract(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor, return_attn: bool = False):
         """Mask-biased entity extraction: read agent/object tokens out of ``B_t``.
 
         Both read-outs are mask-biased *self*-attention over ``B_t``: queries and keys carry
@@ -329,25 +329,32 @@ class InteractionModule(nn.Module):
             b_t (Tensor): Bottleneck token grid ``(B, N, dim)``.
             w_agent (Tensor): Agent occupancy ``(B, N)`` in ``[0, 1]`` (pooled current-frame mask).
             w_object (Tensor): Object occupancy ``(B, N)`` in ``[0, 1]``.
+            return_attn (bool): If True, also return the two read-outs' per-head mask-biased attention
+                weights ``(B, num_heads, N, N)`` (for the extraction-footprint diagnostic). Off the hot path.
 
         Returns:
-            Tuple[Tensor, Tensor]: agent read-out ``A_t`` and object read-out ``O_t``, each ``(B, N, dim)``.
+            ``(A_t, O_t)`` each ``(B, N, dim)``; or ``(A_t, O_t, attn_agent, attn_object)`` when ``return_attn``.
         """
         b_norm = self.norm_extract(b_t)                     # normalize Q/K so beta*W is not swamped
         query = self.embeddings.tag(b_norm, temporal="cur")  # norm(B_t) + p + e_cur
         key = self.embeddings.tag(b_norm, temporal=None)     # norm(B_t) + p
         value = b_t                                          # untagged, UNNORMALIZED content
-        a_t = self.msa_agent(query, key, value, mask_bias=w_agent)
-        o_t = self.msa_object(query, key, value, mask_bias=w_object)
-        return a_t, o_t
+        a = self.msa_agent(query, key, value, mask_bias=w_agent, return_attn=return_attn)
+        o = self.msa_object(query, key, value, mask_bias=w_object, return_attn=return_attn)
+        if return_attn:
+            a_t, attn_a = a
+            o_t, attn_o = o
+            return a_t, o_t, attn_a, attn_o
+        return a, o
 
-    def extract_entities(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor) -> Tuple[Tensor, Tensor]:
+    def extract_entities(self, b_t: Tensor, w_agent: Tensor, w_object: Tensor, return_attn: bool = False):
         """Agent/object read-outs ``(A_t, O_t)`` from a spatial bottleneck ``B_t`` ``(B, dim, H', W')``.
 
         Convenience wrapper (``_to_tokens`` + :meth:`extract`) exposing the entity read-outs the
-        object-dynamics probe regresses object motion from, without running the full FDM. Each ``(B, N, dim)``.
+        object-dynamics probe regresses object motion from, without running the full FDM. Each ``(B, N, dim)``;
+        with ``return_attn`` also the ``(B, num_heads, N, N)`` extraction attention of each read-out.
         """
-        return self.extract(self._to_tokens(b_t), w_agent, w_object)
+        return self.extract(self._to_tokens(b_t), w_agent, w_object, return_attn=return_attn)
 
     def agent_dynamics(self, a_t: Tensor, z: Tensor) -> Tensor:
         """``\hat{A}_{t+1} = F_A(A_t, z_t)``: inject the latent action into the agent pathway.

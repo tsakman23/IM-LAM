@@ -177,6 +177,20 @@ class IMLAMIDMTest(unittest.TestCase):
         self.assertEqual(a_t.dim(), 3)
         self.assertFalse(torch.equal(a_t, o_t))  # agent vs object mask bias -> different read-outs
 
+    def test_extract_entities_exposes_extraction_attention(self):
+        # The extraction-footprint diagnostic needs each read-out's mask-biased attention, threaded from
+        # the interaction module up through the FDM and IMLAMIDM.
+        net = _imlam().eval()
+        with torch.no_grad():
+            a_t, o_t, attn_a, attn_o = net.extract_entities(
+                self.x, self.agent_mask, self.object_mask, return_attn=True)
+        n = a_t.shape[1]  # bottleneck tokens
+        for attn in (attn_a, attn_o):
+            self.assertEqual(attn.dim(), 4)                      # (B, heads, Nq, Nk)
+            self.assertEqual(attn.shape[0], self.b)
+            self.assertEqual(tuple(attn.shape[2:]), (n, n))
+            self.assertTrue(torch.allclose(attn.sum(-1), torch.ones_like(attn.sum(-1)), atol=1e-4))
+
     def test_probe_features_uniform_across_model_types(self):
         # The object-dynamics probe calls net.probe_features on any model; both must return a fixed
         # (B, dim) agent/object feature (IM-LAM from its read-outs, baseline from the pooled bottleneck).

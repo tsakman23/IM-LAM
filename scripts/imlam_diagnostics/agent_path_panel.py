@@ -54,7 +54,7 @@ TASK_CHECKPOINTS = {
     "push-v3":        ("imlam_dmw_stage_1", "checkpoints/im-lam_push_union_seed2-1/step-000031248.ckpt"),
     "sweep-into-v3":  ("imlam_dmw_stage_1", "checkpoints/im-lam_sweep-into_union_seed2-1/step-000031248.ckpt"),
     "pick-place-v3":  ("imlam_dmw_stage_1", "checkpoints/im-lam_pick-place_union_seed2_retry5-1/step-000031248.ckpt"),
-    "peg-insert-side-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_peg-insert-side_union_seed2_retry-1/step-000020000.ckpt"),
+    "peg-insert-side-v3": ("imlam_dmw_stage_1", "checkpoints/im-lam_peg-insert-side_union_seed1_retry-1/step-000015000.ckpt"),
 }
 
 
@@ -149,7 +149,7 @@ def render(rows, out_path, margin, mode="rgb"):
     fig.suptitle("Agent-path corruption (IM-LAM): " + kind + "  |  single-frame illustration of "
                  "R_no_transition / R_shuffled; shuffle source is intra-task", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out_path}")
 

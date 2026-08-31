@@ -133,7 +133,7 @@ def render(rows, out_path):
         ax.set_xticks([]); ax.set_yticks([])
     fig.suptitle("IDM Eigen-CAM", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out_path}")
 

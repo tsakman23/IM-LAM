@@ -193,7 +193,7 @@ def render(out_path, task, target_frames, gt_next, preds, ppms, object_sils, obj
     fig.suptitle(f"{task}  -  FDM {kind} at max-motion frames  |  mean object-region MSE:  "
                  f"{mean_line}\n{seed_note}", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out_path}")
 

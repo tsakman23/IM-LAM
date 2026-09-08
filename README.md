@@ -1,437 +1,163 @@
-# MaskLAM / SLAPO Reproduction Code
+# IM-LAM: Interaction-Masked Latent Action Models
 
-This repository contains implementations and experiment code for **MaskLAM**, the method described in the Submission submission *Segment to Focus: Guiding Latent Action Models in the Presence of Distractors*.
+Code for the MSc thesis ***Interaction-Masked Latent Action Models for Object-Aware Manipulation
+under Visual Distractors*** (Georgios Tsakoumakis, Imperial College London).
 
-In the codebase, **MaskLAM is implemented under the name `SLAPO`**. The repository also contains the **LAPO** baseline used for comparison. The main reproduction scripts for the paper are split by method under `scripts/submission2026/slapo/` and `scripts/submission2026/lapo/`.
+IM-LAM learns latent actions from observation-only video on **Distracting Meta-World (DMW)** and
+adds a **directed agent to object** forward-dynamics model so the world model reasons about the
+manipulated object, not just the arm - under a moving video-clip background that breaks naive pixel
+reconstruction. The repository builds on the MaskLAM / SLAPO reproduction (MaskLAM is implemented
+under the name `SLAPO`) and reuses its three-stage pipeline.
 
-## What this code reproduces
+> **Running experiments:** this README is an overview and quickstart. The full, authoritative
+> workflow - data generation, staging, per-model run commands, diagnostics, and visualization - is
+> in **[`docs/experiments.md`](docs/experiments.md)**.
 
-The paper studies latent action learning from observation-only video in the presence of visual distractors. It evaluates whether masking the forward-dynamics reconstruction loss helps latent action models learn action-aligned latents and better downstream policies.
+## Pipeline
 
-The main experiments are organized by research question:
+Every model runs the same three stages, in one process and one Weights & Biases run:
 
-| Paper result | Script family | What it runs |
+1. **Stage 1 - LAM pretraining.** An inverse-dynamics model (IDM) infers a latent action `z_t`; a forward-dynamics
+   model (FDM) predicts the next frame from the current frame and `z_t`.
+2. **Stage 2 - latent policy.** Behavior cloning of the latent actions on the frozen encoder.
+3. **Stage 3 - action decoder.** Training a decoder to map latents to true actions, followed by a
+   Meta-World rollout success evaluation (`eval/`).
+
+IM-LAM changes **only the Stage-1 FDM**, swapping MaskLAM's monolithic decoder for a directed
+interaction predictor (`IMLAMIDM` + `InteractionWorldModel`); the IDM encoder is identical to
+MaskLAM's, so Stages 2/3 are shared.
+
+## Models
+
+All commands and per-stage configs are in [`docs/experiments.md`](docs/experiments.md). Stage-1
+configs and W&B groups:
+
+| Model | Entry point | Stage-1 config | W&B group |
+|---|---|---|---|
+| LAPO (baseline) | `experiments/run_lapo_bc.py` | `lapo_bc_dmw_stage_1` | `lapo_reprod` |
+| MaskLAM (baseline) | `experiments/run_slapo.py` | `slapo_dmw_stage_1` | `masklam_reprod` |
+| Foreground-MaskLAM (union) | `experiments/run_slapo.py` | `foreground_masklam_dmw_stage_1` | `foreground_masklam` |
+| Foreground-MaskLAM (dual) | `experiments/run_slapo.py` | `foreground_masklam_dual_dmw_stage_1` | `dual_masklam` |
+| **IM-LAM (union)** - main | `experiments/run_slapo.py` | `imlam_dmw_stage_1` | `imlam_union` |
+| IM-LAM (dual) | `experiments/run_slapo.py` | `imlam_dual_dmw_stage_1` | `imlam_dual` |
+| Direct-z (ablation) | `experiments/run_slapo.py` | `imlam_direct_z_dmw_stage_1` | `imlam_direct_z` |
+| OCL / LAPO-Slots (baseline) | `object-centric-lapo/scripts/run_pipeline_slots.py` | `configs/tasks/dmw_base.yaml` | `ocl_slots` |
+
+`union` gates the FDM loss by the agent-and-object union; `dual` scores agent and object terms under
+their own mask-area normalization (`L = L_A + lambda_O * L_O`). The IM-LAM encoder/IDM input stays
+agent-only in both, so `z_t` remains an embodiment action.
+
+## Datasets
+
+Hosted on the Hugging Face Hub:
+
+| Dataset | Masks | Used by |
 |---|---|---|
-| MaskLAM recovers action-aligned latents under distractors | `run_q1_evaluation*.sh` | Full three-stage SLAPO/MaskLAM pipeline with latent action dimension 128 and 128k ground-truth actions |
-| Better alignment translates to better policies | `run_q1_evaluation*.sh` plus `*_success.sh` | Same as above and Meta-World rollout success-rate computation after Q1 training |
-| Cleaner latents allow smaller label budgets | `run_q2_evaluation*.sh` plus `*_success.sh` | Stage 3 label-budget sweep over 2k, 4k, 8k, 16k, 32k, and 64k ground-truth actions |
-| MaskLAM enables compact latent action spaces | `run_q3_evaluation.sh` | Stage 1 latent-dimension sweep over 32, 64, 128, 256, 512, and 1024 |
-| MaskLAM degrades gracefully under agent occlusion | `run_q5_evaluation.sh` | Stage 1 occlusion sweep over 25%, 50%, and 75% agent-mask occlusion |
-| MaskLAM is robust to imperfect segmentation masks | `run_q6_evaluation.sh` | Stage 1 mask perturbation sweep using erosion/dilation radii 0, 1, 2, and 3 |
-| Ablation study | `run_ablation.sh` | Stage 1 ablations for mask channel, loss masking, input masking, multi-step IDM, and related settings |
+| [`EpicPinkPenguin/visual_distracting_metaworld`](https://huggingface.co/datasets/EpicPinkPenguin/visual_distracting_metaworld) | agent only | MaskLAM (LAPO ignores masks) |
+| [`tsakman23/visual_masked_distracting_metaworld`](https://huggingface.co/datasets/tsakman23/visual_masked_distracting_metaworld) | agent + object (ground truth) + `object_state` | Foreground-MaskLAM, IM-LAM, OCL |
+| [`tsakman23/visual_masked_distracting_metaworld_sam`](https://huggingface.co/datasets/tsakman23/visual_masked_distracting_metaworld_sam) | ground-truth **and** SAM-predicted masks | IM-LAM trained on SAM masks (future work) |
 
-The `_success` scripts should be run **after** the corresponding non-`_success` script. They do not retrain the model; they load the checkpoint produced by the training run and perform rollouts to compute downstream success metrics, especially for Distracting Meta-World (DMW).
-
-Note: `experiments/run_slapo.py` now runs this rollout evaluation **inline** at the end of its pipeline (logged under `eval/` in the same run), so for SLAPO the separate `_success` step is only needed to re-score an existing checkpoint or to evaluate with different rollout settings. The LAPO baseline (`run_lapo_bc.py`) still uses the separate `eval_lapo.py` helper.
+Frames are 128x128; each task is a separate config (e.g. `push-v3`) with ~1M train / 100k test steps.
+Generating new-task data and staging a fast local copy are covered in
+[`docs/experiments.md`](docs/experiments.md) (Sections 1-2).
 
 ## Requirements
 
-- Python >= 3.10
-- ffmpeg
-- A Hugging Face account, if downloading hosted datasets
-- A Weights & Biases account, if using `logger.mode=online`
-- CUDA-capable GPU recommended with 24GB of VRAM
-- 100GB of free disk space per environment dataset
-- 64GB of RAM
+- Python >= 3.10, `ffmpeg`, a CUDA GPU (~24 GB VRAM recommended)
+- Hugging Face account (to pull/push datasets) and, optionally, a Weights & Biases account
+- Fast local storage for the staged dataset copy (training reads it every step)
 
-The experiments in the paper were run on a single NVIDIA A100 40 GB GPU. Peak memory was below 24 GB across methods and stages, so reproduction should also be possible on many high-memory consumer GPUs, although wall-clock time will vary.
+## Setup
 
-## Installation
-
-Create and activate a clean conda environment:
+Use the in-repo conda environment and always export the headless-render and cache variables:
 
 ```bash
-conda create -n imitation -c conda-forge python=3.10 -y
-conda activate imitation
+conda activate ./conda_env
+
+export MUJOCO_GL=egl                            # headless EGL rendering
+export HF_HOME=/data2/masklam/datasets/hf_home  # keep HF caches off the home-dir quota
 ```
 
-Install uv for package management:
+Authenticate to the Hub with a **write** token in `HF_TOKEN` (`hf auth whoami` should print your
+username). See [`docs/experiments.md`](docs/experiments.md) Section 0 for the full prerequisites.
+
+## Quickstart
+
+Stage the dataset locally, then launch the full pipeline. Example for **IM-LAM (union)** on one task
+and seed:
 
 ```bash
-pip install uv
+# 1. stage the object-mask data to RAM (see docs/experiments.md Section 2)
+python scripts/save_local_dataset.py \
+  --repo tsakman23/visual_masked_distracting_metaworld --task <task> \
+  --splits test train --out-root /tmp/slapo_local
+
+# 2. run Stage 1 (IM-LAM FDM) -> Stage 2 -> Stage 3 + rollout eval, one W&B run
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
+  run_id=im-lam_<task>_union_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=imlam_union \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn imlam_dmw_stage_1 \
+  --stage stage_2 -cn foreground_masklam_dmw_stage_2 \
+  --stage stage_3 -cn foreground_masklam_dmw_stage_3
 ```
 
-Install the package with all environments:
+Replace `<task>` with a slug such as `push-v3`, `handle-pull-v3`, `pick-place-v3`,
+`peg-insert-side-v3`, `door-open-v3`, `sweep-into-v3`, or `dial-turn-v3`. Every other model's exact
+command (LAPO, MaskLAM, Foreground union/dual, IM-LAM dual, Direct-z, OCL) is in
+[`docs/experiments.md`](docs/experiments.md) Section 4.
 
-```bash
-uv pip install -e .[submission]
-```
+## Diagnostics and figures
 
-For AMD GPUs, install with the ROCm PyTorch index:
+Stage-1 mechanism diagnostics and figure generation live in `scripts/imlam_diagnostics/`; all figures
+are written under `docs/figures/`:
 
-```bash
-uv pip install -e .[submission] --extra-index-url https://download.pytorch.org/whl/rocm6.3
-```
+- **`run_diagnostics.py`** - the headline Stage-1 metrics on a frozen checkpoint and pushes them into
+  that run's W&B summary: **Object Prediction Ratio** (`E_O / E_O^copy`), the object-dynamics probe,
+  and agent-path dependence. Supports `--model imlam | foreground | masklam`.
+- **`reconstruction_panel.py`** - FDM reconstructions with per-pixel error heatmaps.
+- **`agent_path_panel.py`** - object prediction under normal / no-transition / shuffled agent context.
+- **`eigen_cam.py`** - Eigen-CAM saliency of the IDM encoder.
+- **`extraction_footprint.py`** - the interaction attention footprint.
 
-For headless MuJoCo / DeepMind Control runs, always set:
-
-```bash
-export MUJOCO_GL=egl
-```
+Usage and the recommended run order are in [`docs/experiments.md`](docs/experiments.md).
 
 ## Repository structure
 
 ```text
 .
-├── README.md
-├── pyproject.toml
-├── setup.py
-├── ifo/                         # Main implementation package
-│   ├── common/                  # Shared collectors, utilities, wrappers, logging, etc.
-│   └── modules/                 # Method-specific implementations
-├── experiments/                 # Hydra entry points for training and evaluation
-│   └── configs/                 # Hydra configs for SLAPO/MaskLAM, LAPO, and baselines
+├── ifo/                          # Main implementation package (SLAPO/MaskLAM, IM-LAM, LAPO, ...)
+│   ├── common/                   # Shared collectors, nets, datasets, utilities, logging
+│   └── modules/                  # Method-specific modules (slapo/, lapo/, ...)
+├── experiments/                  # Hydra entry points (run_slapo.py, run_lapo_bc.py, ...)
+│   └── configs/                  # Per-stage configs for every model
 ├── scripts/
-│   └── submission2026/             # Paper reproduction scripts and success-eval helpers
-│       ├── slapo/               # SLAPO/MaskLAM reproduction shell scripts
-│       └── lapo/                # LAPO baseline reproduction shell scripts
-├── checkpoints/                 # Training outputs and model checkpoints
-├── videos/                      # Generated videos, if enabled
-├── wandb/                       # Local W&B logs, if enabled
-└── resources/                   # Figures and auxiliary assets
+│   ├── imlam_diagnostics/        # IM-LAM diagnostics + figure generators
+│   ├── save_local_dataset.py     # Stage a fast local dataset copy
+│   └── submission2026/           # Upstream MaskLAM/SLAPO submission reproduction scripts
+├── object-centric-lapo/          # OCL / LAPO-Slots baseline (separate codebase)
+├── distracting-metaworld-dataset-main/   # DMW dataset generator (object masks + object_state)
+├── docs/
+│   ├── experiments.md            # Full run workflow (start here to run anything)
+│   └── figures/                  # Generated diagnostic figures
+└── checkpoints/                  # Training outputs, ./checkpoints/<run_id>-<stage>
 ```
 
-## Methods included
+The upstream MaskLAM/SLAPO submission (the "Segment to Focus" reproduction, research questions
+Q1-Q6 and ablations) is driven by the shell scripts under `scripts/submission2026/`; those are
+separate from the thesis workflow documented in `docs/experiments.md`.
 
-### MaskLAM / SLAPO
+## Citation
 
-`SLAPO` is the implementation name for MaskLAM. It keeps the LAPO training pipeline but masks the Stage 1 forward-dynamics reconstruction loss so that the latent action is trained from agent pixels rather than distractor pixels.
-
-The main SLAPO entry point runs the **entire pipeline in a single process and a single Weights & Biases run** - Stage 1 (IDM), Stage 2 (latent policy), Stage 3 (behavior cloning), followed by a rollout success evaluation:
-
-```bash
-python experiments/run_slapo.py
+```bibtex
+@mastersthesis{tsakoumakis2026imlam,
+  title  = {Interaction-Masked Latent Action Models for Object-Aware Manipulation under Visual Distractors},
+  author = {Tsakoumakis, Georgios},
+  school = {Imperial College London},
+  year   = {2026},
+  type   = {{MSc} thesis}
+}
 ```
 
-Each stage logs under its own metric prefix with a 0-based step axis (`stage_1/`, `stage_2/`, `stage_3/`), and the final rollout eval logs under `eval/` (e.g. `eval/episode_success_rate`). Per-stage checkpoints are still written to `./checkpoints/<run_id>-<stage>`. The rollout eval runs automatically after Stage 3; pass `eval=false` to skip it.
-
-For evaluating an existing Stage-3 checkpoint on its own (for example, re-scoring a finished run), use the standalone success-rollout helper:
-
-```bash
-python scripts/submission2026/eval_slapo.py
-```
-
-### LAPO baseline
-
-The repository also contains LAPO baseline code. The main LAPO behavior-cloning pipeline entry point is:
-
-```bash
-python experiments/run_lapo_bc.py
-```
-
-The success-rollout helper for LAPO checkpoints is:
-
-```bash
-python scripts/submission2026/eval_lapo.py
-```
-
-Use the LAPO configs, for example `lapo_bc_dcs_stage_1`, `lapo_bc_dcs_stage_2`, `lapo_bc_dcs_stage_3`, `lapo_bc_dmw_stage_1`, `lapo_bc_dmw_stage_2`, and `lapo_bc_dmw_stage_3`, when reproducing LAPO baseline runs.
-
-## General Hydra usage
-
-Experiments use Hydra configs. The full pipeline runs in one process and one W&B run; you provide a per-stage config for each stage:
-
-```bash
-python experiments/run_slapo.py \
-  run_id=my_run \
-  env.name=dm_control/masked-cheetah-run-distractor-low-v0 \
-  --stage stage_1 -cn slapo_default_stage_1 \
-  --stage stage_2 -cn slapo_default_stage_2 \
-  --stage stage_3 -cn slapo_default_stage_3
-```
-
-This trains the three stages sequentially in-process and then runs the rollout eval (add `eval=false` to skip). All metrics land in a single run, grouped by stage (`stage_1/`, `stage_2/`, `stage_3/`, `eval/`), each with its own 0-based step axis.
-
-To run only selected stages (checkpoints from earlier stages are resolved from `./checkpoints/<run_id>-<stage>`):
-
-```bash
-python experiments/run_slapo.py \
-  run_id=my_stage1_only_run \
-  env.name=dm_control/masked-cheetah-run-distractor-low-v0 \
-  --selected_stages=[stage_1] \
-  --stage stage_1 -cn slapo_default_stage_1
-```
-
-To continue an interrupted run, reuse the same `run_id`. The experiment code resolves the latest checkpoint in the corresponding checkpoint directory.
-
-## Reproducing the Submission experiments
-
-Run all commands from the repository root. The examples below use the SLAPO/MaskLAM shell scripts in `scripts/submission2026/slapo/`. The LAPO baseline shell scripts live in `scripts/submission2026/lapo/`.
-
-Most scripts use:
-
-```bash
-CACHE_DIR=/tmp/datasets
-```
-
-The scripts remove cached datasets for some sweeps after each environment. Use fast local SSD storage for this directory.
-
-### Q1: action-aligned latents under distractors, plus downstream policies
-
-Ground-truth-mask SLAPO/MaskLAM:
-
-```bash
-bash scripts/submission2026/slapo/run_q1_evaluation.sh
-```
-
-SAM-mask SLAPO/MaskLAM:
-
-```bash
-bash scripts/submission2026/slapo/run_q1_evaluation_sam.sh
-```
-
-These scripts run the full three-stage pipeline over DCS and DMW environments, with seeds `1`, `2`, and `3`, latent action dimension 128, and 128k ground-truth actions for Stage 3.
-
-After the non-`_success` run finishes, compute DMW rollout success rates:
-
-```bash
-bash scripts/submission2026/slapo/run_q1_evaluation_success.sh
-bash scripts/submission2026/slapo/run_q1_evaluation_sam_success.sh
-```
-
-The success scripts load checkpoints named like:
-
-```text
-./checkpoints/slapo_q1_<env>_seed<seed>-3
-./checkpoints/slapo_q1_sam_<env>_seed<seed>-3
-```
-
-and log/print:
-
-```text
-val/episode_success_rate
-val/episode_return
-val/episode_length
-```
-
-### Q2: smaller action-label budgets / sample efficiency
-
-Ground-truth-mask SLAPO/MaskLAM:
-
-```bash
-bash scripts/submission2026/slapo/run_q2_evaluation.sh
-```
-
-SAM-mask SLAPO/MaskLAM:
-
-```bash
-bash scripts/submission2026/slapo/run_q2_evaluation_sam.sh
-```
-
-These scripts run Stage 3 only and sweep labeled action counts:
-
-```text
-2048, 4096, 8192, 16384, 32768, 64000
-```
-
-They reuse Stage 2 checkpoints from Q1:
-
-```text
-./checkpoints/slapo_q1_<env>_seed<seed>-2
-./checkpoints/slapo_q1_sam_<env>_seed<seed>-2
-```
-
-After the non-`_success` runs finish, compute DMW rollout success rates:
-
-```bash
-bash scripts/submission2026/slapo/run_q2_evaluation_success.sh
-bash scripts/submission2026/slapo/run_q2_evaluation_sam_success.sh
-```
-
-The success scripts load Stage 3 checkpoints named like:
-
-```text
-./checkpoints/slapo_q2_<env>_action_count<action_count>_seed<seed>-3
-./checkpoints/slapo_q2_sam_<env>_action_count<action_count>_seed<seed>-3
-```
-
-### Q3: compact latent action spaces
-
-```bash
-bash scripts/submission2026/slapo/run_q3_evaluation.sh
-```
-
-This runs Stage 1 on the DCS distractor environments while sweeping latent action dimension:
-
-```text
-32, 64, 128, 256, 512, 1024
-```
-
-and comparing:
-
-```text
-module.mask_loss=True
-module.mask_loss=False
-```
-
-Run IDs follow:
-
-```text
-slapo_q3_<env>_mask_loss<mask_loss>_action_dim<action_dim>_seed<seed>
-```
-
-### Q5: graceful degradation under agent occlusion
-
-```bash
-bash scripts/submission2026/slapo/run_q5_evaluation.sh
-```
-
-This runs Stage 1 on DCS distractor environments while sweeping:
-
-```text
-module.occlude_mask_observation_fraction in {0.25, 0.5, 0.75}
-module.mask_loss in {True, False}
-```
-
-The 0.0 occlusion setting is produced by the Q3 run at latent action dimension 128.
-
-Run IDs follow:
-
-```text
-slapo_q5_<env>_mask_loss<mask_loss>_occlusion_level<occlusion_level>_seed<seed>
-```
-
-### Q6: robustness to imperfect segmentation masks
-
-```bash
-bash scripts/submission2026/slapo/run_q6_evaluation.sh
-```
-
-This runs Stage 1 on DMW distractor environments while perturbing masks by erosion or dilation:
-
-```text
-radius in {0, 1, 2, 3}
-erosion/dilation pairs: (True, False), (False, True)
-```
-
-Run IDs follow:
-
-```text
-slapo_q6_q1_<env>_erosion_<erosion>_dilation_<dilation>_radius_<radius>_seed<seed>
-```
-
-### Ablation study
-
-```bash
-bash scripts/submission2026/slapo/run_ablation.sh
-```
-
-This runs Stage 1 ablations for the SLAPO/MaskLAM components, including:
-
-- mask channel
-- loss masking
-- input masking
-- multi-step inverse dynamics model setting `k`
-- future-observation sampling
-
-Run IDs follow:
-
-```text
-slapo_ablation_<env>_mask_channel_<mask_channel>_loss_masking_<loss_masking>_input_masking_<input_masking>_k_<k>_seed<seed>
-```
-
-## Success-rate evaluation scripts
-
-The helper scripts `eval_slapo.py` and `eval_lapo.py` are lightweight evaluation entry points. They:
-
-1. Resolve `trainer.previous_stage_checkpoint`.
-2. Load the latest checkpoint from that path.
-3. Instantiate the environment and trained policy.
-4. Run rollouts with the configured rollout horizon and exploration mode.
-5. Print and optionally log:
-   - `val/episode_success_rate`
-   - `val/episode_return`
-   - `val/episode_length`
-
-Example manual SLAPO success evaluation:
-
-```bash
-python scripts/submission2026/eval_slapo.py \
-  -cn slapo_dmw_stage_3 \
-  run_id=manual_success_eval \
-  env.name=Meta-World/masked-MT1-reach-v3 \
-  trainer.previous_stage_checkpoint=./checkpoints/slapo_q1_Meta-World_masked-MT1-reach-v3_seed1-3 \
-  logger.mode=offline
-```
-
-Example manual LAPO success evaluation:
-
-```bash
-python scripts/submission2026/eval_lapo.py \
-  -cn lapo_bc_dmw_stage_3 \
-  run_id=manual_lapo_success_eval \
-  env.name=Meta-World/masked-MT1-reach-v3 \
-  trainer.previous_stage_checkpoint=./checkpoints/lapo_q1_Meta-World_masked-MT1-reach-v3_seed1-3 \
-  logger.mode=offline
-```
-
-## Data and checkpoints
-
-Datasets are expected to be downloaded or cached through the configured dataset loaders. The scripts set cache paths such as:
-
-```text
-/tmp/datasets/slapo/<env>
-```
-
-Checkpoints are written under:
-
-```text
-./checkpoints/<run_id>-<stage_index>
-```
-
-For example:
-
-```text
-./checkpoints/slapo_q1_dm_control_masked-cheetah-run-distractor-low-v0_seed1-1
-./checkpoints/slapo_q1_dm_control_masked-cheetah-run-distractor-low-v0_seed1-2
-./checkpoints/slapo_q1_dm_control_masked-cheetah-run-distractor-low-v0_seed1-3
-```
-
-Stage 2 checkpoints are reused by the Q2 label-budget sweeps. Stage 3 checkpoints are used by the `_success` rollout scripts.
-
-## Expected compute
-
-A single end-to-end run consists of Stage 1 LAM pre-training, Stage 2 latent-policy behavior cloning, and Stage 3 action-decoder fine-tuning. The paper reports single-run wall-clock on an A100 40 GB of approximately:
-
-| Method | DCS | DMW |
-|---|---:|---:|
-| LAPO | ~6 h 21 m | ~5 h 20 m |
-| MaskLAM / SLAPO | ~11 h 8 m | ~7 h 8 m |
-
-Large sweeps such as Q2, Q3, Q5, Q6, and the ablation study are substantially more expensive because they multiply environments by seeds and sweep values.
-
-
-## Troubleshooting
-
-### `dm_control` or MuJoCo fails on a headless machine
-
-Use EGL rendering:
-
-```bash
-export MUJOCO_GL=egl
-```
-
-### A Q2 script cannot find a checkpoint
-
-Run the corresponding Q1 script first. Q2 reuses Q1 Stage 2 checkpoints:
-
-```text
-./checkpoints/slapo_q1_<env>_seed<seed>-2
-./checkpoints/slapo_q1_sam_<env>_seed<seed>-2
-```
-
-### A `_success` script cannot find a checkpoint
-
-Run the corresponding non-`_success` script first. The `_success` scripts load Stage 3 checkpoints from the training run and only perform rollout evaluation.
-
-### W&B login fails
-
-Set logging to offline/disabled before running, or log into W&B:
-
-```bash
-wandb login
-```
-
-### Dataset caching is slow
-
-Use a local SSD cache directory. The scripts default to `/tmp/datasets`; change `CACHE_DIR` in the shell scripts if that path is not suitable.
+Please also cite Meta-World, the DAVIS background dataset, MaskLAM, and LAPO.

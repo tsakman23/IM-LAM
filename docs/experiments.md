@@ -59,7 +59,7 @@ python verify/repush_from_cache.py --config <task> --split train   # ...and --sp
 
 ## 2. Data staging (make a fast, training-ready local copy) - DO THIS BEFORE EACH RUN
 
-Training reads the dataset every step. On `/data2` (a single spinning disk) several concurrent runs
+Training reads the dataset every step. On disk several concurrent runs
 saturate it and stall (see Section 6). So stage a `save_to_disk` copy to **RAM (`/tmp`)** once; then
 training reads it via `load_from_disk` - **no build, no fingerprint stubs, RAM-speed reads.** The
 command downloads from HF and/or reuses the built cache automatically, and is **idempotent** (skips a
@@ -91,20 +91,7 @@ same way - only `--repo` differs.
 
 ---
 
-## 3. Verify a dataset (optional)
-
-```bash
-cd distracting-metaworld-dataset-main
-# IID vs the authors' release (checks first 3k rows; raise --n for more)
-python verify/iid_check.py --config <task> --split train --n 3000
-# Visual mask panels (observation | agent mask | object mask | overlay)
-python verify/render_mask_panels.py \
-  --env Meta-World/MT1-<task> --steps 150 --num_frames 8 --out datasets/verify/mask_panels/<task>
-```
-
----
-
-## 4. (context) How the run reads the dataset
+## 3. (context) How the run reads the dataset
 
 The full pipeline runs Stage 1 (IDM/FDM) -> Stage 2 (latent policy) -> Stage 3 (BC) + rollout eval in
 one process / one W&B run. Two load modes:
@@ -117,11 +104,30 @@ one process / one W&B run. Two load modes:
 
 ---
 
-## 5. Run experiments
+## 4. Run experiments
 
-Both commands are identical except the Stage-1 config and `--repo` you staged in Section 2.
+### 4a. LAPO (baseline)
+```bash
+CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_lapo_bc.py \
+  run_id=lapo_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
+  dataset.dataset_path=/tmp/slapo_local \
+  logger.mode=online logger.group=lapo_reprod logger.notes="LAPO <task> seed1" \
+  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
+  --stage stage_1 -cn lapo_bc_dmw_stage_1 \
+  --stage stage_2 -cn lapo_bc_dmw_stage_2 \
+  --stage stage_3 -cn lapo_bc_dmw_stage_3
+```
+- The unmasked baseline MaskLAM itself compares against - no agent or object mask anywhere in
+  training. Same in-process, one-run pipeline as 5a-5c (`experiments/run_lapo_bc.py` mirrors
+  `run_slapo.py`); the former subprocess-per-stage entry point is gone for this pipeline too.
+- Defaults to the authors' `EpicPinkPenguin` release, pinned in `lapo_bc_dmw_stage_1/2/3.yaml`
+  (`with_object_mask` stays false always - LAPO never reads it). Stage it with
+  `--repo EpicPinkPenguin/...` in Section 2, same as 5a.
+- MaskLAM's own paper doesn't report `sweep-into-v3` or `handle-pull-v3` (not in their MT10
+  table), so for those two override `dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld`
+  on the command line - stage that repo instead (Section 2). Every other task uses the default above.
 
-### 5a. MaskLAM (baseline)
+### 4b. MaskLAM (baseline)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   run_id=masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
@@ -135,7 +141,7 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
 - Uses the authors' `EpicPinkPenguin` release (agent mask only), pinned in `slapo_dmw_stage_1/2/3.yaml`
   with `with_object_mask=false`. Stage it with `--repo EpicPinkPenguin/...` in Section 2.
 
-### 5b. Foreground-MaskLAM (baseline)
+### 4c. Foreground-MaskLAM (baseline)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   run_id=fg_masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
@@ -162,7 +168,7 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
 - Object-mask tasks on `tsakman23/...`: `push-v3`, `door-open-v3`, `sweep-into-v3`, `handle-pull-v3`,
   `pick-place-v3`, `dial-turn-v3`, `peg-insert-side-v3` all have **both** splits now (runnable).
 
-### 5c. Dual-loss variant (baseline)
+### 4d. Dual-loss variant (baseline)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   run_id=dual_masklam_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
@@ -189,28 +195,7 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
 - Per-term losses are logged separately to W&B - `reconstruction_loss_agent` / `reconstruction_loss_object`
   - alongside the combined `reconstruction_loss`, so both terms are visible independently during training.
 
-### 5d. LAPO (baseline)
-```bash
-CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_lapo_bc.py \
-  run_id=lapo_<task>_seed1 env.name=Meta-World/masked-MT1-<task> \
-  dataset.dataset_path=/tmp/slapo_local \
-  logger.mode=online logger.group=lapo_reprod logger.notes="LAPO <task> seed1" \
-  trainer.compile=True fabric.precision=bf16-mixed trainer.random_seed=1 \
-  --stage stage_1 -cn lapo_bc_dmw_stage_1 \
-  --stage stage_2 -cn lapo_bc_dmw_stage_2 \
-  --stage stage_3 -cn lapo_bc_dmw_stage_3
-```
-- The unmasked baseline MaskLAM itself compares against - no agent or object mask anywhere in
-  training. Same in-process, one-run pipeline as 5a-5c (`experiments/run_lapo_bc.py` mirrors
-  `run_slapo.py`); the former subprocess-per-stage entry point is gone for this pipeline too.
-- Defaults to the authors' `EpicPinkPenguin` release, pinned in `lapo_bc_dmw_stage_1/2/3.yaml`
-  (`with_object_mask` stays false always - LAPO never reads it). Stage it with
-  `--repo EpicPinkPenguin/...` in Section 2, same as 5a.
-- MaskLAM's own paper doesn't report `sweep-into-v3` or `handle-pull-v3` (not in their MT10
-  table), so for those two override `dataset.dataset_path=tsakman23/visual_masked_distracting_metaworld`
-  on the command line - stage that repo instead (Section 2). Every other task uses the default above.
-
-### 5e. IM-LAM Union (Interaction-Masked LAM)
+### 4e. IM-LAM Union (Interaction-Masked LAM)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   run_id=im-lam_<task>_union_seed1 env.name=Meta-World/masked-MT1-<task> \
@@ -237,7 +222,7 @@ CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   command): `--selected_stages=[stage_1] ++logger.mode=offline eval=false trainer.max_epochs=null
   trainer.max_steps=60 trainer.validation_frequency=50 trainer.validation_unit=step`.
 
-### 5f. IM-LAM Dual
+### (4f. IM-LAM Dual)
 ```bash
 CUDA_VISIBLE_DEVICES=<n> MUJOCO_GL=egl python experiments/run_slapo.py \
   run_id=im-lam_<task>_dual_seed1 env.name=Meta-World/masked-MT1-<task> \

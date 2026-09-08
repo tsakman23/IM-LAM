@@ -156,7 +156,8 @@ def render(rows, out_path):
             r = t * n_readouts + j
             axes[r][0].imshow(_to_display(row["obs"]))
             axes[r][0].contour(contour.cpu().numpy(), levels=[0.5], colors="lime", linewidths=0.8)
-            axes[r][0].set_ylabel(f"{row['task']}\nframe {row['frame']}\n{label}", fontsize=7)
+            # axes[r][0].set_ylabel(f"{row['task']}\nframe {row['frame']}\n{label}", fontsize=7)
+            axes[r][0].set_ylabel(f"{row['task']}\n{label}", fontsize=8)
             _overlay(axes[r][1], _norm01(mask_hw), row["obs"], contour)
             _overlay(axes[r][2], _norm01(fp_hw), row["obs"], contour)
             _diff_panel(axes[r][3], _norm01(fp_hw) - _norm01(mask_hw), row["obs"], contour)
@@ -166,8 +167,8 @@ def render(rows, out_path):
 
     for ax in axes.ravel():
         ax.set_xticks([]); ax.set_yticks([])
-    fig.suptitle("IM-LAM extraction attention footprint (lime = entity mask; red/blue = attention over/under the mask)",
-                 fontsize=9)
+    # fig.suptitle("IM-LAM extraction attention footprint (lime = entity mask; red/blue = attention over/under the mask)",
+                #  fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -188,6 +189,9 @@ def main():
                    help="Reduce the extraction attention over query tokens by: 'occupancy' (weight each "
                         "query by its entity occupancy - where the entity-region read-out attends, the "
                         "default) or 'uniform' (the plain query-marginal).")
+    p.add_argument("--chunk-size", type=int, default=0,
+                   help="Under --all, split the tasks into separate figures of this many tasks each, "
+                        "suffixed _1, _2, ... (0 = a single combined figure).")
     p.add_argument("--out", default=None)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
@@ -208,11 +212,21 @@ def main():
     model_tag = "imlam-direct-z" if any("direct_z" in c for c in config_names) else "imlam"
     qw_tag = "occ" if args.query_weight == "occupancy" else "uniform"
     tag = "all" if args.all else args.task
-    out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scratchpad",
-                                    "extraction_footprint", f"extraction_footprint_{model_tag}_{qw_tag}_{tag}.png")
-    out = os.path.abspath(out)
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    render(rows, out)
+    outdir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                          "docs", "figures", "extraction_footprint"))
+    prefix = f"extraction_footprint_{model_tag}_{qw_tag}"
+    os.makedirs(outdir, exist_ok=True)
+
+    if args.out:
+        render(rows, os.path.abspath(args.out))
+    elif args.chunk_size and len(rows) > args.chunk_size:
+        # chunk_size == 1: one figure per task, named by task; otherwise numbered _1, _2, ...
+        for i in range(0, len(rows), args.chunk_size):
+            group = rows[i:i + args.chunk_size]
+            suffix = group[0]["task"] if args.chunk_size == 1 else str(i // args.chunk_size + 1)
+            render(group, os.path.join(outdir, f"{prefix}_{suffix}.png"))
+    else:
+        render(rows, os.path.join(outdir, f"{prefix}_{tag}.png"))
 
 
 if __name__ == "__main__":

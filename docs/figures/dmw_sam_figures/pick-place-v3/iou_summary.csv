@@ -1,0 +1,11 @@
+episode,frames,object_detected,agent_iou,object_iou
+0,60,True,0.7005,0.8222
+1,53,True,0.8603,0.7572
+2,50,True,0.8527,0.7803
+3,58,True,0.8569,0.7822
+4,55,True,0.836,0.7455
+5,50,True,0.8488,0.853
+
+OVERALL,6 eps,det_rate=1.000,,
+agent,,,mean=0.8232,median=0.8489
+object,,,mean=0.7898,median=0.7895 area_wtd=0.7875

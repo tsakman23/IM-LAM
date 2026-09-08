@@ -8,6 +8,13 @@
   3. Agent-path dependence (S7.4.3): E_O under agent_ctx_mode normal / no_transition / shuffled, reported
      as R_no-transition = E_O^{no-transition}/E_O^{normal} and R_shuffled (forward-time, no retraining).
 
+Models: IM-LAM (--model imlam), Foreground-MaskLAM (--model foreground) and the plain MaskLAM baseline
+(--model masklam). MaskLAM/Foreground have no agent_ctx_mode, so diagnostic 3 is auto-skipped for them
+and only diagnostic 1 (E_O / E_O^copy / ObjectPredictionRatio) plus the probe run. MaskLAM's own dataset
+is agent-mask only, so its OPR is measured on the SAME object-mask held-out split as IM-LAM/Foreground -
+its FDM still predicts the whole frame, OPR just restricts the error to the ground-truth object region
+(see the --model masklam handling in main); the number is directly comparable across all models.
+
 The per-batch cores live in this file (tested on synthetic data in tests/test_object_diagnostics.py via
 metrics.py + the model's extract_entities); this script only adds checkpoint/data loading and aggregation.
 
@@ -54,13 +61,20 @@ from scripts.imlam_diagnostics.metrics import (  # noqa: E402
 
 CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "experiments", "configs"))
 # (model, loss) -> Stage-1 config. IM-LAM and Foreground share the diagnostics; the direct-z ablation
-# uses --config-name imlam_direct_z_dmw_stage_1.
+# uses --config-name imlam_direct_z_dmw_stage_1. Plain MaskLAM has no loss variant and is resolved
+# separately (see main): it composes slapo_dmw_stage_1 regardless of --loss.
 CONFIG_BY_MODEL_LOSS = {
     ("imlam", "union"): "imlam_dmw_stage_1",
     ("imlam", "dual"): "imlam_dual_dmw_stage_1",
     ("foreground", "union"): "foreground_masklam_dmw_stage_1",
     ("foreground", "dual"): "foreground_masklam_dual_dmw_stage_1",
 }
+MASKLAM_CONFIG = "slapo_dmw_stage_1"
+
+# The object-mask held-out split IM-LAM/Foreground evaluate on (matches their Stage-1 configs'
+# dataset.dataset_path). Plain MaskLAM trains on the authors' AGENT-mask-only repo, which has no object
+# masks - so its OPR is measured on THIS split instead (see the --model masklam handling in main).
+OBJECT_MASK_REPO = "tsakman23/visual_masked_distracting_metaworld"
 
 DEFAULT_RESULTS_CSV = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "results", "imlam_diagnostics.csv"))
 # Fixed superset of columns: not every model produces every metric (R_no_transition/R_shuffled are
@@ -250,8 +264,10 @@ def main():
     """
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True, help="Frozen Stage-1 checkpoint (.ckpt).")
-    p.add_argument("--model", choices=["imlam", "foreground"], default="imlam",
-                   help="Which model the checkpoint is (agent-path is auto-skipped for foreground).")
+    p.add_argument("--model", choices=["imlam", "foreground", "masklam"], default="imlam",
+                   help="Which model the checkpoint is. agent-path (R_no_transition/R_shuffled) is "
+                        "auto-skipped for foreground and masklam (no agent_ctx_mode); masklam is a plain "
+                        "MaskLAM baseline, evaluated for OPR on the object-mask split (see below).")
     p.add_argument("--loss", choices=["union", "dual"], default=None,
                    help="Defaults to auto-detected from the checkpoint path: 'dual' if that word "
                          "appears in the checkpoint's directory name, else 'union'.")
@@ -286,7 +302,8 @@ def main():
     device = torch.device(args.device)
 
     if args.loss is None:
-        args.loss = infer_loss(args.checkpoint)
+        # Plain MaskLAM has no union/dual loss variant; label it 'na' (its config is fixed, below).
+        args.loss = "na" if args.model == "masklam" else infer_loss(args.checkpoint)
     if args.run_seed is None:
         args.run_seed = infer_seed(args.checkpoint)
     wandb_run_id = infer_wandb_run_id(args.checkpoint) if args.wandb_run_id else None
@@ -296,7 +313,23 @@ def main():
     overrides = [f"env.name=Meta-World/masked-MT1-{args.task}", "++module.log_dual_loss_grad_every=0"]
     if args.data_path:
         overrides.append(f"dataset.dataset_path={args.data_path}")
-    config_name = args.config_name or CONFIG_BY_MODEL_LOSS[(args.model, args.loss)]
+    if args.model == "masklam":
+        # MaskLAM's own Stage-1 config pins the authors' AGENT-mask-only dataset (with_object_mask=false),
+        # which carries no object masks or object_state - so OPR (and the probe) cannot be read off it.
+        # Evaluate the MaskLAM checkpoint on the SAME object-mask held-out split IM-LAM/Foreground use,
+        # with the object streams switched on. MaskLAM still predicts the whole frame (SLAPOIDM.forward
+        # ignores object_mask); OPR just restricts that error to the ground-truth object region, so the
+        # number is directly comparable to the other models'. The agent mask fed to MaskLAM is the robot
+        # mask from this repo, matching what it saw in training; cache_dir is inherited from sl_default
+        # (./datasets/slapo/<env>) so the split cache-hits whatever IM-LAM/Foreground already pulled.
+        # Pass --data-path to point at a local object-mask split instead of the default repo.
+        # ++ force-adds with_object_state (absent from the slapo dataset node, present in fg/imlam).
+        overrides += ["dataset.with_object_mask=true", "++dataset.with_object_state=true"]
+        if not args.data_path:
+            overrides.append(f"dataset.dataset_path={OBJECT_MASK_REPO}")
+        config_name = args.config_name or MASKLAM_CONFIG
+    else:
+        config_name = args.config_name or CONFIG_BY_MODEL_LOSS[(args.model, args.loss)]
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR):
         cfg = compose(config_name=config_name, overrides=overrides)
 

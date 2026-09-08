@@ -63,11 +63,42 @@ def eigen_cam(activation):
 # encoder is architecturally identical across model types, so the same hook works for all; only the
 # trained weights differ. door-open has no plain MaskLAM checkpoint, so it's FG-union/FG-dual/IM-LAM.
 COMPARE_MODELS = {
-    "door-open-v3": [
-        ("FG-union", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_door-open_seed2-1/step-000015000.ckpt"),
-        ("FG-dual",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_door-open_seed2-1/step-000031248.ckpt"),
-        ("IM-LAM",   "imlam_dmw_stage_1",                   "checkpoints/im-lam_door-open_union_seed2-1/step-000031248.ckpt"),
+    "push-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/masklam_push_seed1-1/step-000031248.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_push-v3_seed1-1/step-000031248.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_push_seed1-1/step-000010000.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_push_union_seed1-1/step-000031248.ckpt"),
     ],
+    "sweep-into-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/slapo_sweepinto_seed1_reproduction-1/step-000015000.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_sweep-into_seed1-1/step-000015000.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_sweep-into_seed1-1/step-000010000.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_sweep-into_union_seed1-1/step-000020000.ckpt"),
+    ],
+    "door-open-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/masklam_door-open_seed1-1/step-000010000.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_door-open_seed2-1/step-000015000.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_door-open_seed2-1/step-000031248.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_door-open_union_seed2-1/step-000031248.ckpt"),
+    ],
+    "handle-pull-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/masklam_handle-pull-v3_seed1-1/step-000015000.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_handle-pull_seed1-1/step-000031248.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_handle-pull_seed1-1/step-000031248.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_handle-pull_union_seed1-retry-1/step-000031248.ckpt"),
+    ],
+    "pick-place-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/masklam_pick-place_seed1-1/step-000015000.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_pick-place_seed1-1/step-000010000.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_pick-place_seed1-1/step-000010000.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_pick-place_union_seed1_retry5-1/step-000020000.ckpt"),
+    ],
+    "peg-insert-side-v3": [
+        ("MaskLAM",                    "slapo_dmw_stage_1",                   "checkpoints/masklam_peg-insert-side_seed1-1/step-000010000.ckpt"),
+        ("Foreground-MaskLAM (Union)", "foreground_masklam_dmw_stage_1",      "checkpoints/fg_masklam_peg-insert-side_seed1_retry-1/step-000010000.ckpt"),
+        ("Foreground-MaskLAM (Dual)",  "foreground_masklam_dual_dmw_stage_1", "checkpoints/dual_masklam_peg-insert-side_seed1-1/step-000025000.ckpt"),
+        ("IM-LAM",                     "imlam_dmw_stage_1",                   "checkpoints/im-lam_peg-insert-side_union_seed1_retry-1/step-000015000.ckpt"),
+    ]
 }
 
 
@@ -87,13 +118,15 @@ def _cam_for_model(net, obs, agent_mask, object_mask, seed):
 def collect_task(task, models, data_path, split, frame_stack, seed, device):
     """Load the task's max-motion batch once, compute the IDM Eigen-CAM for each model.
 
-    models = [(label, config_name, checkpoint)]. The dataset is loaded from the first model's config
-    (all share the object-mask repo/dir); the uniform net(obs, agent_mask, object_mask=...) call works
-    for SLAPOIDM (ignores object_mask) and IMLAMIDM (uses it)."""
+    models = [(label, config_name, checkpoint)]. The dataset is loaded from the IM-LAM config (the only
+    one guaranteed to set with_object_mask/with_object_state; a Foreground config - e.g. models[0] under
+    --compare - loads no object_mask), and the uniform net(obs, agent_mask, object_mask=...) call works
+    for SLAPOIDM (ignores object_mask) and IMLAMIDM (uses it). The underlying data is identical across
+    configs; only the mask-loading flags differ."""
     frames = DEFAULT_TARGET_FRAMES.get(task)
     if not frames:
         raise SystemExit(f"no default max-motion frames for {task}")
-    dataset = hydra.utils.instantiate(_compose(models[0][1], task, data_path).dataset, split=split)
+    dataset = hydra.utils.instantiate(_compose("imlam_dmw_stage_1", task, data_path).dataset, split=split)
     batch = tensordict_collate([dataset[f - frame_stack] for f in frames]).to(device)
     obs, agent_mask, object_mask = batch["observation"], batch["mask"], batch["object_mask"]
     _, t, c, h, w = obs.shape
@@ -121,7 +154,8 @@ def render(rows, out_path):
         ax = axes[r][0]
         ax.imshow(_to_display(row["obs"]))
         ax.contour(row["agent"].cpu().numpy(), levels=[0.5], colors="lime", linewidths=0.8)
-        ax.set_ylabel(f"{row['task']}\nframe {row['frame']}", fontsize=8)
+        # ax.set_ylabel(f"{row['task']}\nframe {row['frame']}", fontsize=8)
+        ax.set_ylabel(f"{row['task']}", fontsize=8)
         if r == 0:
             ax.set_title("observation (agent=lime)", fontsize=9)
         for j, (label, sal) in enumerate(row["cams"]):
@@ -131,7 +165,7 @@ def render(rows, out_path):
 
     for ax in axes.ravel():
         ax.set_xticks([]); ax.set_yticks([])
-    fig.suptitle("IDM Eigen-CAM", fontsize=10)
+    # fig.suptitle("IDM Eigen-CAM", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -180,7 +214,7 @@ def main():
         model_tag = "imlam-direct-z" if any("direct_z" in c for c in config_names) else "imlam"
     tag = "all" if args.all else args.task
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
-                                    "scratchpad", "eigen_cam", f"eigen_cam_{model_tag}_{tag}.png")
+                                    "docs", "figures", "eigen_cam", f"eigen_cam_{model_tag}_{tag}.png")
     out = os.path.abspath(out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     render(rows, out)

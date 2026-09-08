@@ -1,0 +1,11 @@
+# Local overrides. Add any config fields here.
+# These take precedence when passed as the last --config argument.
+#
+# Example usage:
+#   python scripts/run_pipeline.py --task dcs_cheetah_run --variant slots \
+#       --config configs/overrides.yaml
+#
+cache_dir: /tmp/datasets
+torch_compile: true
+# num_workers: 8
+# precision: float32

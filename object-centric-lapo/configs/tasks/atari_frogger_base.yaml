@@ -1,0 +1,46 @@
+task:
+  # This name is overridden in the pipeline based on --name.
+  name: "atari/Frogger-v5"
+  image_size: [128, 128]
+  obs_channels: 3
+  action_dim: 5
+  action_space_type: "discrete"
+  num_slots: 3
+
+videosaur:
+  slot_attention:
+    num_slots: 3
+
+lapo_slots:
+  latent_action_dim: 128
+  batch_size: 128
+  lr: 1.5e-4
+  warmup_epochs: 0
+  epochs: 4
+  grad_clip: 1.0
+  val_frequency: 10000
+
+lapo_masks:
+  channel_multiplier: 4
+  latent_action_dim: 128
+  batch_size: 128
+  encoder_deep: true
+  encoder_num_res_blocks: 2
+  lr: 1.5e-4
+  warmup_epochs: 0
+  epochs: 4
+  grad_clip: 1.0
+  val_frequency: 7800
+
+bc:
+  bc_epochs: 4
+  latent_action_dim: 128
+  batch_size: 128
+  finetune_updates: 25000
+  bc_val_frequency: 10000
+  ft_val_frequency: 12000
+  lr: 1.5e-4
+  finetune_lr: 1.0e-3
+  finetune_warmup_epochs: 0
+  finetune_hidden_dim: 256
+  subset_size: 128000

@@ -1,0 +1,11 @@
+bc:
+  hidden_dim: 256
+  action_head_dim: 128
+  encoder_num_res_blocks: 2
+  channel_multiplier: 4
+  encoder_deep: false
+  bc_epochs: 10
+  lr: 1.0e-4
+  grad_clip: 1.0
+  bc_val_frequency: 10000
+  bc_val_unit: "step"

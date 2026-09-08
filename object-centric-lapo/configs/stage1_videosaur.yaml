@@ -1,0 +1,21 @@
+videosaur:
+  dino:
+    model_name: "vit_base_patch14_dinov2.lvd142m"
+    image_size: 518
+    feature_dim: 768
+  slot_attention:
+    slot_dim: 128
+    num_iterations: 3
+  sim_weight: 0.1
+  sim_temperature: 0.075
+  lr: 3.0e-4
+  warmup_steps: 1250
+  max_steps: 25000
+  batch_size: 256
+  grad_clip: 0.05
+  lr_scheduler: "exp_decay_with_warmup"
+  decay_steps: 25000
+  episode_length: 3
+  max_video_length: 1000
+  val_frequency: 12000
+  val_unit: "step"

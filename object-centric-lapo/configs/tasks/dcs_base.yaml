@@ -1,0 +1,46 @@
+task:
+  # This name is overridden in the pipeline based on --task.
+  name: "dm_control/masked-cheetah-run-v0"
+  image_size: [64, 64]
+  obs_channels: 3
+  action_dim: 6
+  num_slots: 4
+
+videosaur:
+  slot_attention:
+    num_slots: 4
+
+lapo_slots:
+  latent_action_dim: 128
+  batch_size: 256
+  lr: 3.0e-4
+  warmup_epochs: 0
+  epochs: 1
+  grad_clip: 1.0
+  val_frequency: 11000
+
+lapo_masks:
+  channel_multiplier: 4
+  latent_action_dim: 128
+  batch_size: 256
+  encoder_deep: false
+  encoder_num_res_blocks: 2
+  lr: 3.0e-4
+  warmup_epochs: 0
+  epochs: 1
+  grad_clip: 1.0
+  val_frequency: 11000
+
+bc:
+  bc_epochs: 1
+  latent_action_dim: 128
+  batch_size: 256
+  finetune_updates: 25000
+  bc_val_frequency: 11000
+  ft_val_frequency: 12000
+  lr: 3.0e-4
+  finetune_lr: 1.0e-3
+  finetune_warmup_epochs: 0
+  finetune_hidden_dim: 256
+  subset_size: 128000
+

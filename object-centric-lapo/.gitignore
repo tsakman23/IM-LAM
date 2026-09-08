@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Checkpoints & logs
+checkpoints/
+wandb/
+outputs/
+*.ckpt
+*.pt
+*.pth
+
+# Data
+*.hdf5
+*.h5
+datasets/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env

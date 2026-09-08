@@ -1,0 +1,2 @@
+# Stage 2: Slot selection - no additional hyperparameters beyond task config
+# Uses PCA(n=32) + LinearRegression + 5-fold CV per slot

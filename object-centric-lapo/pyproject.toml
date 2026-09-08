@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "object-centric-lapo"
+version = "0.1.0"
+description = "Object-Centric Latent Action Learning (arXiv 2502.09680)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "torchvision",
+    "timm",
+    "wandb",
+    "gymnasium",
+    "scikit-learn",
+    "tensordict",
+    "numpy",
+    "tqdm",
+    "pyyaml",
+    "datasets",
+]
+
+[project.optional-dependencies]
+dcs = [
+    "shimmy>=2.0",
+    "dm_control",
+    "mujoco",
+]
+dmw = [
+    "metaworld @ git+https://github.com/Farama-Foundation/Metaworld.git@master",
+]
+atari = [
+    "gymnasium[atari]",
+    "ale-py==0.12.0",
+    "opencv-python==4.11.0.86",
+]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

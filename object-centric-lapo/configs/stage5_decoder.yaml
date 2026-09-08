@@ -1,0 +1,9 @@
+bc:
+  finetune_lr: 3.0e-4
+  finetune_warmup_epochs: 0
+  ft_val_frequency: 10000
+  ft_val_unit: "step"
+  rollout_steps: 100000
+  rollout_num_envs: 8
+  rollout_sample: false
+  subset_size: 128000

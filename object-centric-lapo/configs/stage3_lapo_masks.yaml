@@ -1,0 +1,19 @@
+variant: "masks"
+
+lapo_masks:
+  quantizer_type: "identity"
+  # num_codes: 256
+  # num_codebooks: 2
+  # num_latents: 1
+  world_model_type: "unet"
+  base_channels: 24
+  future_obs_offset: 10
+  frame_stack: 3
+  encoder_deep: false
+  encoder_num_res_blocks: 2
+  lr: 3.0e-4
+  warmup_epochs: 1
+  epochs: 2
+  grad_clip: 1.0
+  val_frequency: 10000
+  val_unit: "step"
